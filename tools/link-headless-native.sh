@@ -31,8 +31,9 @@ if [[ -n $radv_archive ]]; then
 fi
 # The SDK's dlfcn wrappers explicitly return unavailable when these optional
 # weak hooks are null. This static frontend supplies no dynamic-loader hooks.
+link() {
 "$template/.deps/native/ps5-payload-sdk/bin/prospero-lld" \
-    "${tls_flags[@]}" "${radv_link_flags[@]}" -L "$sdk/target/lib" \
+    "$@" "${tls_flags[@]}" "${radv_link_flags[@]}" -L "$sdk/target/lib" \
     --defsym=__dlopen=0 --defsym=__dlsym=0 --defsym=__dladdr=0 \
     --defsym=__dlclose=0 --defsym=__dlerror=0 \
     -T "$template/tooling/native/ps5-pie.ld" -T "$root/tools/unwind.ld" \
@@ -44,3 +45,19 @@ fi
     "$sdk/target/lib/libc++.a" "$sdk/target/lib/libc++abi.a" "$sdk/target/lib/libunwind.a" \
     --end-group --as-needed "$sdk/target/lib/libSceLibcInternal.so" "$sdk/target/lib/libkernel.so" \
     "$sdk/target/lib/libc.a" "$sdk/target/lib/libSceNet.so"
+}
+link
+# Mesa's dispatch tables name entry points RADV leaves to common code through weak references.
+# LLVM 19 and later resolve those to zero; LLVM 18's lld imports them instead, and no system
+# module exports them. Resolve the ones the archive left undefined to zero, as newer lld does.
+if [[ -n $radv_archive ]]; then
+    nm=$(command -v llvm-nm || command -v llvm-nm-18)
+    unresolved=()
+    while read -r kind name; do
+        [[ $kind == w && $name =~ ^(radv|vk|wsi)_ ]] && unresolved+=("--defsym=$name=0")
+    done < <("$nm" -D --undefined-only "$output")
+    if (( ${#unresolved[@]} )); then
+        echo "Resolving ${#unresolved[@]} unimplemented weak Vulkan entry points to zero"
+        link "${unresolved[@]}"
+    fi
+fi
