@@ -1,0 +1,36 @@
+name: Game tiles publish
+
+# Publishes a finished "Game tiles build" run's ZIP as a pre-release, so it can be downloaded
+# without signing in to GitHub.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Run ID of the successful "Game tiles build"
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ProsperoEden-game-tiles
+          path: dist
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist
+          tag="game-tiles-${{ inputs.run_id }}"
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ inputs.run_id }}" -q .head_sha)
+          gh release create "$tag" -R "$GITHUB_REPOSITORY" --target "$sha" --prerelease \
+            --title "ProsperoEden with game tiles and button swap ($tag)" \
+            --notes "Built from $sha by run ${{ inputs.run_id }}." dist/*.zip dist/SHA256SUMS
