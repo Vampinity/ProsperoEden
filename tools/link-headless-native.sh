@@ -47,17 +47,26 @@ link() {
     "$sdk/target/lib/libc.a" "$sdk/target/lib/libSceNet.so"
 }
 link
-# Mesa's dispatch tables name entry points RADV leaves to common code through weak references.
-# LLVM 19 and later resolve those to zero; LLVM 18's lld imports them instead, and no system
-# module exports them. Resolve the ones the archive left undefined to zero, as newer lld does.
+# Mesa's dispatch tables (RADV's and its layers': sqtt, rra, ...) name entry points left to common
+# code through weak references. LLVM 19 and later resolve those to zero; LLVM 18's lld imports
+# them instead, and no system module exports them. Resolve every weak symbol the link left
+# undefined that no linked system module exports to zero, as newer lld does.
 if [[ -n $radv_archive ]]; then
     nm=$(command -v llvm-nm || command -v llvm-nm-18)
+    modules=("$sdk"/target/lib/*.so)
+    for library in "${libraries[@]}"; do [[ $library == *.so ]] && modules+=("$library"); done
+    declare -A exported=()
+    while read -r name; do exported[$name]=1; done < <(
+        for module in "${modules[@]}"; do
+            [[ -f $module ]] && "$nm" -D --defined-only "$module" 2>/dev/null | awk '{sub(/@.*/, "", $NF); print $NF}'
+        done)
     unresolved=()
     while read -r kind name; do
-        [[ $kind == w && $name =~ ^(radv|vk|wsi)_ ]] && unresolved+=("--defsym=$name=0")
+        name=${name%%@*}
+        [[ $kind == w && -z ${exported[$name]:-} ]] && unresolved+=("--defsym=$name=0")
     done < <("$nm" -D --undefined-only "$output")
     if (( ${#unresolved[@]} )); then
-        echo "Resolving ${#unresolved[@]} unimplemented weak Vulkan entry points to zero"
+        echo "Resolving ${#unresolved[@]} unimplemented weak entry points to zero"
         link "${unresolved[@]}"
     fi
 fi
