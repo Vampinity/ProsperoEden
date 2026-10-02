@@ -26,6 +26,20 @@ using elevation::wire::Kind;
 using elevation::wire::Message;
 
 constexpr char target_title_id[] = "PPSA99008";
+// ProsperoEden's game tiles (headless/game_tile.h) run the same app as PPSA98000-PPSA98999.
+constexpr char tile_title_prefix[] = "PPSA98";
+
+bool target_title(const char (&title_id)[14]) noexcept
+{
+    if (std::memcmp(title_id, target_title_id, sizeof(target_title_id)) == 0)
+        return true;
+    if (std::memcmp(title_id, tile_title_prefix, sizeof(tile_title_prefix) - 1) != 0 || title_id[9] != '\0')
+        return false;
+    for (int i = 6; i < 9; ++i)
+        if (title_id[i] < '0' || title_id[i] > '9')
+            return false;
+    return true;
+}
 constexpr std::uint64_t system_auth_id = UINT64_C(0x4801000000000013);
 
 struct AppInfo
@@ -64,8 +78,7 @@ bool kernel_pointer(std::intptr_t pointer) noexcept
 bool find_target(std::uint32_t pid, Target &target) noexcept
 {
     AppInfo info{};
-    if (sceKernelGetAppInfo(static_cast<pid_t>(pid), &info) != 0 ||
-        std::memcmp(info.title_id, target_title_id, sizeof(target_title_id)) != 0)
+    if (sceKernelGetAppInfo(static_cast<pid_t>(pid), &info) != 0 || !target_title(info.title_id))
         return false;
 
     // Walk afresh instead of reusing the SDK's PID cache after the handshake.

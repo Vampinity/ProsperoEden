@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Where ProsperoEden keeps things. With filesystem access (elevation/elevation.hpp, requested
 // first thing in main) the app uses real console paths:
-//   app folder     the install location, normally /data/homebrew/PPSA99008
+//   app folder     the install location, normally /data/homebrew/PPSA99008 (a game tile's
+//                  own title ID instead: game_tile.h)
 //   data           /data/prosperoeden: config/ (prosperoeden.json), logs/, covers/, user/
 // Without it (no elfldr, or the request failed) the sandbox paths stay: /app0 and /download0.
 #pragma once
@@ -13,7 +14,35 @@
 namespace Eden {
 inline constexpr const char* kDataDir = "/data/prosperoeden";
 inline constexpr const char* kDefaultAssetsDir = "/data/prosperoeden";
-inline constexpr const char* kInstallDir = "/data/homebrew/PPSA99008";
+inline constexpr const char* kTitleId = "PPSA99008";
+
+// The title this copy of the app runs as: PPSA99008, or a game tile's own ID (game_tile.h).
+// Read from /app0 before filesystem access is requested, which takes /app0 away.
+inline std::string& RunningTitleId() {
+    static std::string title = kTitleId;
+    return title;
+}
+inline bool ValidTileTitleId(std::string_view id) {
+    if (id.size() != 9 || id.substr(0, 6) != "PPSA98") return false;
+    for (char c : id.substr(6))
+        if (c < '0' || c > '9') return false;
+    return true;
+}
+inline void ReadRunningTitleId() {
+    FILE* file = std::fopen("/app0/sce_sys/param.json", "rb");
+    if (!file) return;
+    char text[8192]{};
+    const std::size_t size = std::fread(text, 1, sizeof(text) - 1, file);
+    std::fclose(file);
+    const std::string_view json{text, size};
+    const auto key = json.find("\"titleId\"");
+    if (key == json.npos) return;
+    const auto open = json.find('"', json.find(':', key));
+    if (open == json.npos || open + 10 > json.size() || json[open + 10] != '"') return;
+    const std::string_view id = json.substr(open + 1, 9);
+    if (ValidTileTitleId(id)) RunningTitleId() = std::string{id};
+}
+inline std::string InstallDir() { return "/data/homebrew/" + RunningTitleId(); }
 
 // Filesystem access requested at startup: -1 not requested, 0 granted, otherwise the
 // elevation::Status that refused it.
@@ -37,9 +66,9 @@ inline const std::string& AppDir() {
     static const std::string directory = [] {
         if (!FilesystemAccess()) return std::string{"/app0"};
         // A console root has no /app0: the sandbox mounts it from the install folder.
-        for (const char* candidate : {kInstallDir, "/mnt/sandbox/PPSA99008_000/app0"})
-            if (FileExists(std::string{candidate} + "/eboot.bin")) return std::string{candidate};
-        return std::string{kInstallDir};
+        for (const std::string& candidate : {InstallDir(), "/mnt/sandbox/" + RunningTitleId() + "_000/app0"})
+            if (FileExists(candidate + "/eboot.bin")) return candidate;
+        return InstallDir();
     }();
     return directory;
 }

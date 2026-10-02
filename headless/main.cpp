@@ -12,6 +12,7 @@
 #include "jit_list.h"
 #ifdef PS5_NATIVE
 #include "elevation/elevation.hpp"
+#include "game_tile.h"
 #include <sys/stat.h>
 #endif
 #ifdef EDEN_DEV_VULKAN
@@ -144,7 +145,8 @@ int main(int argc, char** argv) {
 #ifdef PS5_NATIVE
         // Filesystem access beyond the sandbox, first: every path below depends on it
         // (assets_dir.h). Requested once, still single-threaded. Without it the app keeps its
-        // sandbox paths.
+        // sandbox paths. A game tile's title ID comes from /app0 first (game_tile.h).
+        Eden::ReadRunningTitleId();
         Eden::FilesystemAccessStatus() = static_cast<int>(elevation::request(elevation::Capability::filesystem));
         if (Eden::FilesystemAccess()) MigrateSandboxData();
         for (const auto& folder : {Eden::UserDir(), Eden::ConfigDir(), Eden::CoversDir(), Eden::LogsDir()}) {
@@ -201,7 +203,7 @@ int main(int argc, char** argv) {
         });
         {
             const std::string access = "status=" + std::to_string(Eden::FilesystemAccessStatus()) +
-                " app=" + Eden::AppDir() + " data=" + Eden::UserDir() + " game_files=" + Eden::AssetsDir();
+                " title=" + Eden::RunningTitleId() + " app=" + Eden::AppDir() + " data=" + Eden::UserDir() + " game_files=" + Eden::AssetsDir();
             Eden::Report("filesystem access", access.c_str());
             if (Eden::FilesystemAccess() && Eden::AssetsDir() == Eden::kDefaultAssetsDir)
                 for (const char* folder : {"/keys", "/firmware", "/roms", "/updates", "/mods", "/ryujinx"})
@@ -279,6 +281,14 @@ int main(int argc, char** argv) {
         // A game that faulted early in its boot is restarted (at most four times per launch).
         std::string relaunch_game;
         unsigned guest_fault_retries = 0;
+#ifdef PS5_NATIVE
+        // A game tile boots its game at once and closes with it (game_tile.h). After a crash the
+        // launcher opens with its notice instead.
+        const Eden::Tile::Game tile = Eden::Tile::Read();
+        bool tile_boot_pending = tile.Set() && last_crash.report.empty();
+        bool tile_session = false;
+        if (tile.Set()) Eden::Report("game tile", tile.Name().c_str());
+#endif
 #ifdef EDEN_DEV_VULKAN
         std::string recovery_mode;
         std::ifstream(Eden::AppFile("backend-recovery.txt")) >> recovery_mode;
@@ -344,6 +354,16 @@ int main(int argc, char** argv) {
             selected_game = std::exchange(relaunch_game, {});
         } else {
         guest_fault_retries = 0;
+#ifdef PS5_NATIVE
+        tile_session = false;
+        if (std::exchange(tile_boot_pending, false)) {
+            selected_game = Eden::Tile::FindRom(tile);
+            tile_session = !selected_game.empty();
+            if (!tile_session)
+                launch_error = "This game tile's game is not in the game files folder: " + tile.Name();
+        }
+        if (selected_game.empty()) {
+#endif
 #if defined(EDEN_DEV_PROFILE) || defined(EDEN_DEV_ROM_ID)
         if (std::exchange(autoboot_pending, false)) {
         // Match the title ID in the file name, else in the ROM's own metadata; the game files
@@ -371,6 +391,9 @@ int main(int argc, char** argv) {
         }
 #else
         selected_game = SelectProsperoEdenGame(launch_error);
+#endif
+#ifdef PS5_NATIVE
+        }
 #endif
         }
         if (selected_game.empty()) {
@@ -1391,7 +1414,9 @@ int main(int argc, char** argv) {
             LOG_INFO(Frontend, "EDEN_DEVICE_FRONTEND_PASS");
         }
 #ifdef PS5_NATIVE
-        if (return_to_menu) continue;
+        // A game tile closes with its game (Select + L1 too), back to the PS5's home screen; a
+        // restart after an early guest fault still boots it again.
+        if (return_to_menu && (!tile_session || !relaunch_game.empty())) continue;
 #endif
         passed("HEADLESS_COMPLETE");
 #ifdef EDEN_DEV_PROFILE

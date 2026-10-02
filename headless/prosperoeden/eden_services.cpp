@@ -429,6 +429,16 @@ std::vector<pe::ui::Game> EdenServices::games() {
     }
     std::sort(games.begin(), games.end(),
               [](const pe::ui::Game& a, const pe::ui::Game& b) { return a.name < b.name; });
+    // What the Library lists, for tools beside the app (tools/game-tiles reads it to make a game's
+    // PS5 home screen tile): its file, title ID, name and cached cover.
+    Eden::Settings::Json index = Eden::Settings::Json::array();
+    for (const auto& game : games)
+        index.push_back({{"file", game.file},
+                         {"title_id", game.title_id ? Eden::Settings::TitleKey(game.title_id) : std::string{}},
+                         {"name", game.name},
+                         {"cover", game.cover}});
+    if (!Eden::Settings::Write({{"games", index}}, Eden::ConfigFile("library.json")))
+        Eden::Report("library", "Could not write library.json");
     return games;
 }
 
