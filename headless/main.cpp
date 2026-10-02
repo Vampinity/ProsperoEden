@@ -13,6 +13,7 @@
 #ifdef PS5_NATIVE
 #include "elevation/elevation.hpp"
 #include "game_tile.h"
+#include "now_playing.h"
 #include <sys/stat.h>
 #endif
 #ifdef EDEN_DEV_VULKAN
@@ -288,6 +289,8 @@ int main(int argc, char** argv) {
         bool tile_boot_pending = tile.Set() && last_crash.report.empty();
         bool tile_session = false;
         if (tile.Set()) Eden::Report("game tile", tile.Name().c_str());
+        // A game that was playing when the app last stopped (a crash, a forced close) is not now.
+        if (!Eden::NowPlaying::Stop()) Eden::Report("now playing", "Could not write now-playing.json");
 #endif
 #ifdef EDEN_DEV_VULKAN
         std::string recovery_mode;
@@ -975,6 +978,8 @@ int main(int argc, char** argv) {
                     const bool saved_recent = Eden::SaveRecentGame(filename);
                     if (!saved_last || !saved_recent)
                         Eden::Report("history", "Could not save recent game");
+                    if (!Eden::NowPlaying::Start(guest, eden_game_title_id(guest)))
+                        Eden::Report("now playing", "Could not write now-playing.json");
                 }
 #endif
                 passed(game ? "game_loaded" : "nro_loaded");
@@ -1407,7 +1412,12 @@ int main(int argc, char** argv) {
                 }
 #endif
 #endif
-                if (game) LOG_INFO(Frontend, "EDEN_GAME_SESSION_END {}", cycle + 1);
+                if (game) {
+                    LOG_INFO(Frontend, "EDEN_GAME_SESSION_END {}", cycle + 1);
+#ifdef PS5_NATIVE
+                    (void)Eden::NowPlaying::Stop();
+#endif
+                }
             }
         }
         passed("core_destroyed");

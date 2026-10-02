@@ -53,6 +53,7 @@ The complete ProsperoEden source is in this repository: the PS5 frontend and lau
 - **Shader cache** - shaders compiled in earlier sessions are loaded when a game starts, so an effect stutters only the first time it appears.
 - **In-game shortcuts** - a performance overlay (Select + R1), and Select + L1 to end the game and return to the library.
 - **Settings in one place** - a single JSON file under `/data/prosperoeden`, with game volume, mute, and detailed logging options. Logs keep the previous session.
+- **Now playing** - while a game runs, `/data/prosperoeden/config/now-playing.json` names it (title, title ID, file, cover, start time), so a home dashboard can show it; it stays with `"playing": false` when the game ends.
 - **Crash reports** - if ProsperoEden stops because of an error, it saves a report with that session's logs, starts again and shows where the report is.
 - **Controllers, audio, and saves** - up to four DualSense controllers (one per signed-in PS5 user) with rumble and motion controls, game audio, and save data work out of the box.
 
