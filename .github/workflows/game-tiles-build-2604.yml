@@ -1,0 +1,60 @@
+name: Game tiles build (Ubuntu 26.04)
+
+# The release build (make release; docs/BUILDING.md) in an Ubuntu 26.04 container, the host the
+# ProsperoEden build is made for, with its default LLVM beside LLVM 18. The ZIP is kept as a
+# 14-day artifact.
+on:
+  push:
+    branches: [game-tiles-2604]
+  workflow_dispatch:
+
+concurrency:
+  group: game-tiles-build-2604
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    container:
+      image: ubuntu:26.04
+      options: >-
+        -v /usr/share/dotnet:/host/dotnet -v /usr/local/lib/android:/host/android
+        -v /opt/ghc:/host/ghc -v /opt/hostedtoolcache:/host/toolcache
+    steps:
+      - name: Free disk space on the runner
+        run: |
+          rm -rf /host/dotnet/* /host/android/* /host/ghc/* /host/toolcache/* || true
+          df -h /
+
+      - name: Host tools
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq git ca-certificates sudo
+          llvm=$(apt-cache depends clang | grep -o 'clang-[0-9]*' | head -1 | cut -d- -f2)
+          echo "Default LLVM: $llvm"
+          apt-get install -y -qq clang-18 lld-18 llvm-18 clang lld llvm cmake ninja-build ccache make \
+            nasm rsync glslang-tools spirv-tools bison flex curl wget unzip tar xz-utils python3 \
+            python3-venv python3-mako python3-yaml python3-packaging python3-ply meson pkg-config \
+            autoconf automake libtool file \
+            llvm-$llvm-dev libclang-$llvm-dev libclang-cpp$llvm-dev libpolly-$llvm-dev \
+            libllvmspirvlib-$llvm-dev libclc-$llvm-dev libclc-$llvm
+          ld.lld --version; meson --version
+
+      - uses: actions/checkout@v4
+
+      - name: Build and package
+        env:
+          JOBS: 4
+        run: |
+          git config --global --add safe.directory "$PWD"
+          bash tools/check-toolchain.sh
+          bash tools/ci/build-release.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProsperoEden-game-tiles
+          path: dist/
+          retention-days: 14
