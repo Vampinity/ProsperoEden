@@ -475,6 +475,8 @@ pe::ui::Preferences EdenServices::preferences() {
     result.refresh = saved.refresh;
     result.output = saved.output;
     result.vibration = saved.vibration;
+    result.swap_ab = saved.swap_ab;
+    result.swap_xy = saved.swap_xy;
     result.language = saved.language;
     result.menu_volume = saved.menu_volume;
     result.large_text = saved.large_text;
@@ -495,6 +497,8 @@ bool EdenServices::set_preferences(const pe::ui::Preferences& preferences) {
     value.refresh = preferences.refresh;
     value.output = preferences.output;
     value.vibration = preferences.vibration;
+    value.swap_ab = preferences.swap_ab;
+    value.swap_xy = preferences.swap_xy;
     value.language = preferences.language;
     value.menu_volume = preferences.menu_volume;
     value.large_text = preferences.large_text;

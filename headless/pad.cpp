@@ -247,8 +247,6 @@ void Pad::Consume(std::size_t player, std::span<const ps5::pad::Data> samples) {
     using namespace ps5::pad;
     using Button = InputCommon::VirtualGamepad::VirtualButton;
     static constexpr std::pair<ButtonMask, Button> buttons[] = {
-        {kButtonCircle, Button::ButtonA}, {kButtonCross, Button::ButtonB},
-        {kButtonTriangle, Button::ButtonX}, {kButtonSquare, Button::ButtonY},
         {kButtonL3, Button::StickL}, {kButtonR3, Button::StickR},
         {kButtonL1, Button::TriggerL}, {kButtonR1, Button::TriggerR},
         {kButtonOptions, Button::ButtonPlus},
@@ -261,6 +259,13 @@ void Pad::Consume(std::size_t player, std::span<const ps5::pad::Data> samples) {
         {kButtonL1, Button::ButtonSL}, {kButtonR1, Button::ButtonSR},
         {kButtonL1, static_cast<Button>(kRightSL)}, {kButtonR1, static_cast<Button>(kRightSR)},
     };
+    // A, B, X and Y where a Switch has them (Circle A, Triangle X), each pair swappable on its own
+    // (Cross A, Square X, where an Xbox pad has them).
+    const std::pair<ButtonMask, Button> face[] = {
+        {swap_ab ? kButtonCross : kButtonCircle, Button::ButtonA},
+        {swap_ab ? kButtonCircle : kButtonCross, Button::ButtonB},
+        {swap_xy ? kButtonSquare : kButtonTriangle, Button::ButtonX},
+        {swap_xy ? kButtonTriangle : kButtonSquare, Button::ButtonY}};
     auto& slot = slots[player];
     // The guest's Minus: the Create button, or the touchpad as Select.
     const auto set_minus = [&](u32 pressed) {
@@ -308,6 +313,8 @@ void Pad::Consume(std::size_t player, std::span<const ps5::pad::Data> samples) {
             slot.select_held = false;
         }
         last_buttons = pressed;
+        for (const auto [mask, button] : face)
+            engine->SetButtonState(player, button, (sample.buttons & mask) != 0);
         for (const auto [mask, button] : buttons)
             engine->SetButtonState(player, button, (sample.buttons & mask) != 0);
         set_minus(sample.buttons);

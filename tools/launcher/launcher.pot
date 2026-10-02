@@ -989,6 +989,22 @@ msgstr ""
 msgid "Supply your own files"
 msgstr ""
 
+#: pe/ui/settings.cpp
+msgid "SWAP A AND B"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Swap A and B"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "SWAP X AND Y"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Swap X and Y"
+msgstr ""
+
 #: eden_services.cpp
 msgid "Taiwan"
 msgstr ""

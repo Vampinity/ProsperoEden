@@ -117,6 +117,15 @@ int main() {
     assert(Eden::SavePreferences(controls, file));
     assert(!Eden::LoadPreferences(file).vibration);
     assert(Read(file).find("\"vibration\": false") != std::string::npos);
+    // Swap A and B, Swap X and Y (Settings > Controls): each off unless turned on.
+    auto layout = Eden::LoadPreferences(file);
+    assert(!layout.swap_ab && !layout.swap_xy);
+    layout.swap_ab = true;
+    assert(Eden::SavePreferences(layout, file));
+    const auto swapped = Eden::LoadPreferences(file);
+    assert(swapped.swap_ab && !swapped.swap_xy && !swapped.vibration);
+    assert(Read(file).find("\"swap_ab\": true") != std::string::npos);
+    assert(Read(file).find("\"swap_xy\": false") != std::string::npos);
 
     // The launcher's look (Settings > Accessibility): all off unless turned on.
     auto look = Eden::LoadPreferences(file);

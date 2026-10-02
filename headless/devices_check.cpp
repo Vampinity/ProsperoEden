@@ -120,6 +120,18 @@ void CheckPad() {
             for (int i = 0; i < 22; ++i)
                 CHECK(pad.Engine().GetButton({}, i) == (i == button || (sl_sr >= 0 && (i == sl_sr || i == sl_sr + 4))));
         }
+        // Swap A and B, Swap X and Y: each pair on its own (A 0, B 1, X 2, Y 3).
+        const auto face = [&](bool ab, bool xy, const std::pair<ButtonMask, int> (&expected)[4]) {
+            pad.SetFaceButtonSwap(ab, xy);
+            for (auto [mask, button] : expected) {
+                sample.buttons = mask; consume();
+                for (int i = 0; i < 4; ++i) CHECK(pad.Engine().GetButton({}, i) == (i == button));
+            }
+        };
+        face(true, false, {{kButtonCross, 0}, {kButtonCircle, 1}, {kButtonTriangle, 2}, {kButtonSquare, 3}});
+        face(false, true, {{kButtonCircle, 0}, {kButtonCross, 1}, {kButtonSquare, 2}, {kButtonTriangle, 3}});
+        face(true, true, {{kButtonCross, 0}, {kButtonCircle, 1}, {kButtonSquare, 2}, {kButtonTriangle, 3}});
+        pad.SetFaceButtonSwap(false, false);
         sample.buttons = 0;
         sample.left_stick = {0, 255}; sample.right_stick = {255, 0}; consume();
         CHECK(pad.Engine().GetAxis({}, 0) == -1); CHECK(pad.Engine().GetAxis({}, 1) == -1);

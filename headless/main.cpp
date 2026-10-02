@@ -864,7 +864,9 @@ int main(int argc, char** argv) {
             pad = std::make_unique<Eden::Pad>();
             if (!pad->Open()) throw std::runtime_error("PS5 controller initialization failed");
             Settings::values.audio_output_device_id = "ps5";
-            Settings::values.vibration_enabled.SetValue(Eden::LoadPreferences().vibration);
+            const Eden::Preferences preferences = Eden::LoadPreferences();
+            Settings::values.vibration_enabled.SetValue(preferences.vibration);
+            pad->SetFaceButtonSwap(preferences.swap_ab, preferences.swap_xy);
             // One Pro Controller per signed-in user's DualSense; later changes apply mid-game.
             const unsigned connected = pad->ConnectedPlayers();
             (void)pad->TakeConnectionChanges();

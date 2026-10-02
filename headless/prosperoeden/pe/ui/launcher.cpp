@@ -91,7 +91,7 @@ std::array<bool, 3> Launcher::switch_states(Modal modal) const
     case Modal::audio:
         return {prefs_.mute, false, false};
     case Modal::controls:
-        return {prefs_.vibration, false, false};
+        return {prefs_.vibration, prefs_.swap_ab, prefs_.swap_xy};
     case Modal::accessibility:
         return {prefs_.large_text, prefs_.high_contrast, prefs_.reduce_motion};
     default:

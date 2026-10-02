@@ -223,6 +223,8 @@ void Launcher::draw_settings(Canvas &c)
     case kControls:
         about = tr("Shortcuts during a game, and vibration.");
         lines = {{tr("VIBRATION"), on_off(prefs_.vibration)},
+                 {tr("SWAP A AND B"), on_off(prefs_.swap_ab)},
+                 {tr("SWAP X AND Y"), on_off(prefs_.swap_xy)},
                  {tr("END GAME"), "Select + L1"},
                  {tr("FPS OVERLAY"), "Select + R1"}};
         break;
@@ -286,6 +288,8 @@ int Launcher::dialog_rows(Modal modal) const
     case Modal::audio:
     case Modal::accessibility:
         return 3;
+    case Modal::controls:
+        return 3;
     case Modal::game:
         // Console mode, renderer, resolution, filter, refresh rate, mods; save data in builds that
         // move saves.
@@ -306,6 +310,8 @@ float Launcher::dialog_row_top(Modal modal, int row) const
         return kVideoRowsTop + kVideoRowPitch * static_cast<float>(row) - video_rows_.scroll();
     case Modal::game:
         return 334.0f + 96.0f * static_cast<float>(row);
+    case Modal::controls: // below the shortcuts
+        return 512.0f + 96.0f * static_cast<float>(row);
     default:
         return 670.0f;
     }
@@ -389,7 +395,12 @@ void Launcher::press_dialog(Key key)
         }
         break;
     case Modal::controls:
-        prefs_.vibration = !prefs_.vibration;
+        if (option_ == 0)
+            prefs_.vibration = !prefs_.vibration;
+        else if (option_ == 1)
+            prefs_.swap_ab = !prefs_.swap_ab;
+        else
+            prefs_.swap_xy = !prefs_.swap_xy;
         break;
     case Modal::accessibility:
         if (option_ == 0)
@@ -560,7 +571,7 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
             {"Select + R1", TR("Show or hide the FPS overlay")}};
         for (int i = 0; i < 2; ++i)
         {
-            const float top = 366.0f + 78.0f * static_cast<float>(i);
+            const float top = 340.0f + 60.0f * static_cast<float>(i);
             list.bordered_rect({592.0f, top, 186.0f, 54.0f}, 12.0f, Color::rgb(0x15231d, 0.9f),
                                1.0f, theme::kRowEdge.with_alpha(0.6f));
             text(c, kShortcuts[i].keys, 685.0f, baseline(top, 54.0f, theme::kSmall), theme::kSmall,
@@ -569,9 +580,14 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
                         theme::kBody, 526.0f);
         }
         text_shrink(c, tr("Select is the touchpad button on PS5."), 592.0f,
-                    baseline(540.0f, 36.0f, theme::kSmall), theme::kSmall, theme::kMeta, 736.0f);
+                    baseline(464.0f, 36.0f, theme::kSmall), theme::kSmall, theme::kMeta, 736.0f);
         label(0, tr("Vibration"), kToggle);
         toggle(c, 1292.0f, row_centre(0), knob);
+        // Off, the buttons sit where a Switch has them: Circle A, Cross B, Triangle X, Square Y.
+        label(1, tr("Swap A and B"), kToggle);
+        toggle(c, 1292.0f, row_centre(1), tween::clamp01(switches_[1].value));
+        label(2, tr("Swap X and Y"), kToggle);
+        toggle(c, 1292.0f, row_centre(2), tween::clamp01(switches_[2].value));
         break;
     }
     case Modal::accessibility:
@@ -609,8 +625,9 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
         scrollbar(c, video_rows_, 1340.0f, kVideoWindow.y, kVideoWindow.h);
     }
 
-    // Under the rows: Video's five end lower than the other dialogs' three.
-    const float foot = modal == Modal::video ? 848.0f : 811.0f;
+    // Under the rows: Video's five and the controls under their shortcuts end lower than the other
+    // dialogs' three.
+    const float foot = modal == Modal::video ? 848.0f : modal == Modal::controls ? 826.0f : 811.0f;
     if (!message_.empty())
     {
         notice(c, message_, 592.0f, foot + 7.0f, theme::kSmall,

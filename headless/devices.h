@@ -71,6 +71,8 @@ public:
     void Consume(std::span<const ps5::pad::Data> samples) { Consume(0, samples); }
     void Consume(std::size_t player, std::span<const ps5::pad::Data> samples);
     PadEngine& Engine() { return *engine; }
+    // Settings > Controls > Swap A and B, Swap X and Y: set before a game starts.
+    void SetFaceButtonSwap(bool ab, bool xy) { swap_ab = ab; swap_xy = xy; }
 private:
     struct Slot {
         int user = -1;
@@ -89,6 +91,8 @@ private:
     std::shared_ptr<PadEngine> engine;
     float deadzone;
     float trigger_threshold;
+    bool swap_ab = false;
+    bool swap_xy = false;
     std::array<Slot, kMaxPlayers> slots{};
     bool owns_user_service = false;
     std::atomic<bool> return_to_menu = false;

@@ -7,7 +7,7 @@
 //                "upscaling_filter": "bilinear", "refresh_rate": "60",
 //                "output_resolution": "1080p" },
 //     "audio": { "volume": 100, "mute": false, "menu_volume": 70 },
-//     "controls": { "vibration": true },
+//     "controls": { "vibration": true, "swap_ab": false, "swap_xy": false },
 //     "system": { "language": "en-US" },
 //     "accessibility": { "large_text": false, "high_contrast": false, "reduce_motion": false },
 //     "diagnostics": { "detailed_logging": false },
@@ -87,6 +87,10 @@ struct Preferences {
     int refresh = 0;                     // index into kRefreshKeys
     int output = 0;                      // index into kOutputKeys
     bool vibration = true;
+    // Settings > Controls: A and B (Circle A, Cross B, where a Switch has them) and X and Y
+    // (Triangle X, Square Y) swapped, each on its own: Cross A, Square X as on an Xbox pad.
+    bool swap_ab = false;
+    bool swap_xy = false;
     int language = 0;                    // index into kLanguageKeys (English (US), Eden's default)
     int menu_volume = 70;                // the launcher's own sounds, 0 (off) to 100
     bool large_text = false;             // Settings > Accessibility: the launcher's look
@@ -236,6 +240,8 @@ inline Preferences LoadPreferences(const std::string& file = SettingsFile()) {
     result.output = KeyIndex(Settings::String(document, Json::json_pointer("/video/output_resolution")),
                              kOutputKeys, int(std::size(kOutputKeys)), result.output);
     result.vibration = Settings::Bool(document, Json::json_pointer("/controls/vibration"), result.vibration);
+    result.swap_ab = Settings::Bool(document, Json::json_pointer("/controls/swap_ab"), result.swap_ab);
+    result.swap_xy = Settings::Bool(document, Json::json_pointer("/controls/swap_xy"), result.swap_xy);
     result.language = KeyIndex(Settings::String(document, Json::json_pointer("/system/language")),
                                kLanguageKeys, int(std::size(kLanguageKeys)), result.language);
     result.large_text = Settings::Bool(document, Json::json_pointer("/accessibility/large_text"), false);
@@ -264,6 +270,8 @@ inline bool SavePreferences(const Preferences& value, const std::string& file = 
     document["audio"]["mute"] = value.mute;
     document["audio"]["menu_volume"] = value.menu_volume;
     document["controls"]["vibration"] = value.vibration;
+    document["controls"]["swap_ab"] = value.swap_ab;
+    document["controls"]["swap_xy"] = value.swap_xy;
     document["system"]["language"] = kLanguageKeys[value.language];
     document["diagnostics"]["detailed_logging"] = value.detailed_logging;
     document["accessibility"]["large_text"] = value.large_text;

@@ -1209,3 +1209,19 @@ msgstr "{0}/（NSPまたはXCI）"
 #: pe/ui/browse.cpp
 msgid "{0}/ (one folder per game ID)"
 msgstr "{0}/（タイトルIDごとに1フォルダー）"
+
+#: pe/ui/settings.cpp
+msgid "SWAP A AND B"
+msgstr "A と B を入れ替え"
+
+#: pe/ui/settings.cpp
+msgid "SWAP X AND Y"
+msgstr "X と Y を入れ替え"
+
+#: pe/ui/settings.cpp
+msgid "Swap A and B"
+msgstr "A と B を入れ替え"
+
+#: pe/ui/settings.cpp
+msgid "Swap X and Y"
+msgstr "X と Y を入れ替え"
