@@ -40,6 +40,13 @@ jobs:
           JOBS: 4
         run: bash tools/ci/build-release.sh
 
+      - name: Tile starter
+        # The small app make-tiles.py installs as each game's tile (dist/tile-starter.zip).
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y -qq zip
+          bash tools/game-tiles/starter/build.sh
+
       - uses: actions/upload-artifact@v4
         with:
           name: ProsperoEden-game-tiles
