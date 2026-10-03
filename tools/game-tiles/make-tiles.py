@@ -11,7 +11,7 @@ its sce_sys and a tile.txt that names the game, so the PS5 shows that game while
 The games come from /data/prosperoeden/config/library.json, which the Library writes: open the
 Library once after adding games. Which tile belongs to which game is kept in
 /data/prosperoeden/config/tiles.json, so running this again updates the same tiles and only adds
-new ones. A tile is a full copy of the app (about 80 MB). Needs a running FTP server on the
+new ones; a tile that is already up to date is skipped, so it can run on a schedule. A tile is a full copy of the app (about 80 MB). Needs a running FTP server on the
 console (the Payload SDK's ftpsrv, port 2121) and Python 3 only.
 """
 import argparse
@@ -34,6 +34,7 @@ def connect(host, port):
     client = ftplib.FTP()
     client.connect(host, port, timeout=60)
     client.login()
+    client.voidcmd('TYPE I')  # binary, which SIZE needs
     return client
 
 
@@ -150,6 +151,7 @@ def main(argv):
     parser.add_argument('--port', type=int, default=2121)
     parser.add_argument('--only', help='only the games whose name contains this text')
     parser.add_argument('--dry-run', action='store_true', help='list the tiles without changing the console')
+    parser.add_argument('--force', action='store_true', help='copy tiles again even when they are up to date')
     options = parser.parse_args(argv)
     app = options.app
     if not (app / 'eboot.bin').is_file() or not (app / 'sce_sys/param.json').is_file():
@@ -174,6 +176,17 @@ def main(argv):
 
         for tile_id, game in plan:
             remote = f'{HOMEBREW}/{tile_id}'
+            title = f'title={game["title_id"]}\n' if re.fullmatch(r'[0-9A-Fa-f]{16}', game.get('title_id', '')) else ''
+            tile_text = f'rom={game["file"]}\n{title}'.encode()
+            # Run on a schedule, this only copies new games' tiles and tiles of an updated app.
+            if not options.force and read_remote(client, f'{remote}/tile.txt') == tile_text:
+                try:
+                    current = client.size(f'{remote}/eboot.bin') == (app / 'eboot.bin').stat().st_size
+                except ftplib.error_perm:
+                    current = False
+                if current:
+                    print(f'  {tile_id} is up to date')
+                    continue
             icon = None
             if game.get('cover'):
                 cover = read_remote(client, game['cover'])
@@ -191,8 +204,7 @@ def main(argv):
                 else:
                     data = local.read_bytes()
                 write_remote(client, f'{remote}/{relative}', data)
-            title = f'title={game["title_id"]}\n' if re.fullmatch(r'[0-9A-Fa-f]{16}', game.get('title_id', '')) else ''
-            write_remote(client, f'{remote}/tile.txt', f'rom={game["file"]}\n{title}'.encode())
+            write_remote(client, f'{remote}/tile.txt', tile_text)
             print(f'  installed {remote}')
         write_remote(client, f'{CONFIG}/tiles.json', (json.dumps({'tiles': tiles}, indent=2) + '\n').encode())
     print(f'{len(plan)} tiles. Restart the PS5 (or your homebrew loader) if new ones do not appear.')
