@@ -27,6 +27,26 @@ def connect(host, port):
     return client
 
 
+def delete(client, path):
+    """Deletes a file; ftpsrv answers DELE with 226 instead of 250, which ftplib rejects."""
+    try:
+        client.delete(path)
+    except ftplib.error_reply as reply:
+        if not str(reply).startswith('2'):
+            raise
+    except ftplib.error_perm:
+        pass  # not there
+
+
+def rename(client, source, target):
+    """Renames a file, accepting any 2xx/3xx reply the server gives."""
+    try:
+        client.rename(source, target)
+    except ftplib.error_reply as reply:
+        if not str(reply)[:1] in '23':
+            raise
+
+
 def ensure_directories(client, relative):
     path = REMOTE
     for part in pathlib.PurePosixPath(relative).parent.parts:
@@ -58,11 +78,8 @@ def main(argv):
             target = f'{REMOTE}/{relative}'
             with local.open('rb') as source:
                 client.storbinary(f'STOR {target}.partial', source)
-            try:
-                client.delete(target)
-            except ftplib.error_perm:
-                pass
-            client.rename(f'{target}.partial', target)
+            delete(client, target)
+            rename(client, f'{target}.partial', target)
             print(f'copied {relative}', flush=True)
     with connect(host, port) as client:
         try:

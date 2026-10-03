@@ -38,6 +38,26 @@ def connect(host, port):
     return client
 
 
+def delete(client, path):
+    """Deletes a file; ftpsrv answers DELE with 226 instead of 250, which ftplib rejects."""
+    try:
+        client.delete(path)
+    except ftplib.error_reply as reply:
+        if not str(reply).startswith('2'):
+            raise
+    except ftplib.error_perm:
+        pass  # not there
+
+
+def rename(client, source, target):
+    """Renames a file, accepting any 2xx/3xx reply the server gives."""
+    try:
+        client.rename(source, target)
+    except ftplib.error_reply as reply:
+        if not str(reply)[:1] in '23':
+            raise
+
+
 def read_remote(client, path):
     buffer = io.BytesIO()
     try:
@@ -49,11 +69,8 @@ def read_remote(client, path):
 
 def write_remote(client, path, data):
     client.storbinary(f'STOR {path}.partial', io.BytesIO(data))
-    try:
-        client.delete(path)
-    except ftplib.error_perm:
-        pass
-    client.rename(f'{path}.partial', path)
+    delete(client, path)
+    rename(client, f'{path}.partial', path)
 
 
 def ensure_directory(client, path):
