@@ -14,7 +14,7 @@ not have (from an earlier full copy) are removed. The 4K backgrounds and sound a
 The games come from /data/prosperoeden/config/library.json, which the Library writes: open the
 Library once after adding games. Which tile belongs to which game is kept in
 /data/prosperoeden/config/tiles.json, so running this again updates the same tiles and only adds
-new ones; a tile that is already up to date is skipped, so it can run on a schedule. A tile is a full copy of the app (about 80 MB). Needs a running FTP server on the
+new ones; a tile that is already up to date is skipped, so it can run on a schedule. Needs a running FTP server on the
 console (the Payload SDK's ftpsrv, port 2121) and Python 3 only.
 """
 import argparse
