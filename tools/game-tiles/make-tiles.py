@@ -4,9 +4,12 @@
 
   tools/game-tiles/make-tiles.py HOST APP_DIR [--port 2121] [--only NAME] [--dry-run]
 
-APP_DIR is the PPSA99008 folder of a release ZIP with game tiles (headless/game_tile.h). Each tile
-is a copy of it installed as /data/homebrew/PPSA98001-PPSA98999 with the game's name and cover in
-its sce_sys and a tile.txt that names the game, so the PS5 shows that game while it runs.
+APP_DIR is normally the tile starter folder (tools/game-tiles/starter, about 1.7 MB): each tile is
+then a small app, installed as /data/homebrew/PPSA98001-PPSA98999 with the game's name and cover in
+its sce_sys and a tile.txt naming the game, that asks websrv to start ProsperoEden with that game.
+APP_DIR can also be the PPSA99008 folder of a release ZIP (headless/game_tile.h): the tile is then
+a full copy of the app (about 80 MB) that runs the game itself. Files in a tile that APP_DIR does
+not have (from an earlier full copy) are removed. The 4K backgrounds and sound are never copied.
 
 The games come from /data/prosperoeden/config/library.json, which the Library writes: open the
 Library once after adding games. Which tile belongs to which game is kept in
@@ -28,6 +31,7 @@ CONFIG = '/data/prosperoeden/config'
 HOMEBREW = '/data/homebrew'
 FIRST_TILE, LAST_TILE = 98001, 98999
 ICON_SIZE = 512
+SKIPPED = {'sce_sys/pic0.dds', 'sce_sys/pic1.dds', 'sce_sys/snd0.at9'}
 
 
 def connect(host, port):
@@ -56,6 +60,23 @@ def rename(client, source, target):
     except ftplib.error_reply as reply:
         if not str(reply)[:1] in '23':
             raise
+
+
+def remote_files(client, path, prefix=''):
+    """Files under a console folder, relative to it; empty when it does not exist."""
+    found = []
+    try:
+        entries = list(client.mlsd(path))
+    except ftplib.error_perm:
+        return found
+    for name, facts in entries:
+        if name in ('.', '..'):
+            continue
+        if facts.get('type') == 'dir':
+            found += remote_files(client, f'{path}/{name}', f'{prefix}{name}/')
+        elif facts.get('type') == 'file':
+            found.append(f'{prefix}{name}')
+    return found
 
 
 def read_remote(client, path):
@@ -172,9 +193,10 @@ def main(argv):
     options = parser.parse_args(argv)
     app = options.app
     if not (app / 'eboot.bin').is_file() or not (app / 'sce_sys/param.json').is_file():
-        sys.exit(f'{app} is not a PPSA99008 folder from a release ZIP')
+        sys.exit(f'{app} is not a tile starter or PPSA99008 folder')
     param = json.loads((app / 'sce_sys/param.json').read_text())
-    files = sorted(p for p in app.rglob('*') if p.is_file())
+    files = sorted(p for p in app.rglob('*') if p.is_file() and p.relative_to(app).as_posix() not in SKIPPED)
+    wanted = {p.relative_to(app).as_posix() for p in files} | {'tile.txt'}
 
     with connect(options.host, options.port) as client:
         library = read_remote(client, f'{CONFIG}/library.json')
@@ -222,6 +244,15 @@ def main(argv):
                     data = local.read_bytes()
                 write_remote(client, f'{remote}/{relative}', data)
             write_remote(client, f'{remote}/tile.txt', tile_text)
+            stale = sorted(set(remote_files(client, remote)) - wanted)
+            for relative in stale:
+                delete(client, f'{remote}/{relative}')
+            folders = {str(parent) for r in stale for parent in pathlib.PurePosixPath(r).parents} - {'.'}
+            for folder in sorted(folders, key=lambda f: f.count('/'), reverse=True):
+                try:
+                    client.rmd(f'{remote}/{folder}')
+                except ftplib.Error:
+                    pass  # still holds files the tile keeps
             print(f'  installed {remote}')
         write_remote(client, f'{CONFIG}/tiles.json', (json.dumps({'tiles': tiles}, indent=2) + '\n').encode())
     print(f'{len(plan)} tiles. Restart the PS5 (or your homebrew loader) if new ones do not appear.')
