@@ -285,7 +285,9 @@ int main(int argc, char** argv) {
 #ifdef PS5_NATIVE
         // A game tile boots its game at once and closes with it (game_tile.h). After a crash the
         // launcher opens with its notice instead.
-        const Eden::Tile::Game tile = Eden::Tile::Read();
+        Eden::Tile::Game tile = Eden::Tile::Read();
+        // ProsperoEden started with a game in its arguments boots it the same way.
+        if (!tile.Set()) tile = Eden::Tile::FromArguments(argc, argv);
         bool tile_boot_pending = tile.Set() && last_crash.report.empty();
         bool tile_session = false;
         if (tile.Set()) Eden::Report("game tile", tile.Name().c_str());

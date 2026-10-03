@@ -5,12 +5,17 @@
 // The tile's tile.txt names its game: "rom=<file name in roms/>" and "title=<16 hex digits>"
 // (either is enough; the file name is tried first). A tile boots its game at once and closes
 // with it; Select + L1 goes back to the PS5's home screen.
+// ProsperoEden itself boots a game the same way when it is started with one in its arguments,
+// for example by a launcher on the network (websrv's /launch?titleId=PPSA99008&args=title=<ID>):
+// "title=<16 hex digits>" or a bare title ID, or "rom=<file name>" (a name with spaces may come
+// split into several arguments; they are joined again).
 #pragma once
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 #include "assets_dir.h"
@@ -29,6 +34,19 @@ struct Game {
     }
 };
 
+inline bool TitleText(std::string_view text) {
+    return text.size() == 16 && text.find_first_not_of("0123456789abcdefABCDEF") == std::string_view::npos;
+}
+
+// One "rom=" or "title=" line of tile.txt, or one launch argument.
+inline void ReadSetting(Game& game, const std::string& line) {
+    if (line.starts_with("rom=")) {
+        if (ValidRomFilename(line.substr(4))) game.rom = line.substr(4);
+    } else if (line.starts_with("title=") && TitleText(std::string_view{line}.substr(6))) {
+        game.title_id = std::strtoull(line.c_str() + 6, nullptr, 16);
+    }
+}
+
 // The game this copy of the app boots; none when it runs as ProsperoEden itself.
 inline Game Read() {
     Game game;
@@ -36,12 +54,22 @@ inline Game Read() {
     std::ifstream file(AppFile("tile.txt"));
     for (std::string line; std::getline(file, line);) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.starts_with("rom=")) {
-            if (ValidRomFilename(line.substr(4))) game.rom = line.substr(4);
-        } else if (line.starts_with("title=") && line.size() == 22 &&
-                   line.find_first_not_of("0123456789abcdefABCDEF", 6) == std::string::npos) {
-            game.title_id = std::strtoull(line.c_str() + 6, nullptr, 16);
-        }
+        ReadSetting(game, line);
+    }
+    return game;
+}
+
+// The game named in the app's launch arguments; none without one.
+inline Game FromArguments(int argc, char** argv) {
+    Game game;
+    for (int i = 0; i < argc && argv[i]; ++i) {
+        std::string argument = argv[i];
+        if (TitleText(argument)) argument = "title=" + argument;
+        if (argument.starts_with("rom="))
+            while (i + 1 < argc && argv[i + 1] && !std::string_view{argv[i + 1]}.starts_with("title=") &&
+                   !ValidRomFilename(argument.substr(4)))
+                argument += std::string{" "} + argv[++i];
+        ReadSetting(game, argument);
     }
     return game;
 }
