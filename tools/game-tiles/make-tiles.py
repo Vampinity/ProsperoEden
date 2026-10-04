@@ -6,7 +6,9 @@
 
 APP_DIR is normally the tile starter folder (tools/game-tiles/starter, about 1.7 MB): each tile is
 then a small app, installed as /data/homebrew/PPSA98001-PPSA98999 with the game's name and cover in
-its sce_sys and a tile.txt naming the game, that asks websrv to start ProsperoEden with that game.
+its sce_sys and a tile.txt naming the game, that hands the game to the tile launcher
+(/data/prosperoeden/tile-launch.elf, installed from APP_DIR) through websrv and closes; the
+launcher starts ProsperoEden with that game once the tile is gone.
 APP_DIR can also be the PPSA99008 folder of a release ZIP (headless/game_tile.h): the tile is then
 a full copy of the app (about 80 MB) that runs the game itself. Files in a tile that APP_DIR does
 not have (from an earlier full copy) are removed. The 4K backgrounds and sound are never copied.
@@ -16,6 +18,10 @@ Library once after adding games. Which tile belongs to which game is kept in
 /data/prosperoeden/config/tiles.json, so running this again updates the same tiles and only adds
 new ones; a tile that is already up to date is skipped, so it can run on a schedule. Needs a running FTP server on the
 console (the Payload SDK's ftpsrv, port 2121) and Python 3 only.
+
+Every run also gives each installed emulator (ProsperoEden, and others listed in EMULATORS) its
+console's label as home screen icon, from labels/ next to this script or from GitHub, and puts a
+tile's cover where the home screen draws it (/user/appmeta). Restart the PS5 to see changed icons.
 """
 import argparse
 import ftplib
@@ -25,6 +31,7 @@ import pathlib
 import re
 import struct
 import sys
+import urllib.request
 import zlib
 
 CONFIG = '/data/prosperoeden/config'
@@ -32,6 +39,33 @@ HOMEBREW = '/data/homebrew'
 FIRST_TILE, LAST_TILE = 98001, 98999
 ICON_SIZE = 512
 SKIPPED = {'sce_sys/pic0.dds', 'sce_sys/pic1.dds', 'sce_sys/snd0.at9'}
+APPS, APPMETA = '/user/app', '/user/appmeta'
+LAUNCHER = 'tile-launch.elf'  # goes to CONFIG/.., not into the tiles
+LABELS = pathlib.Path(__file__).resolve().parent / 'labels'
+LABEL_URL = 'https://raw.githubusercontent.com/Vampinity/ProsperoEden/game-tiles/tools/game-tiles/labels/{}.png'
+# Installed emulators get their console's label (labels/<slug>.png) as home screen icon, found by
+# title ID or by the app's name. RetroArch runs many consoles and keeps its own icon.
+EMULATORS = [
+    ('switch', r'PPSA99008|ProsperoEden|\b(Eden|yuzu|suyu|Ryujinx|Citron|Sudachi)\b'),
+    ('3ds', r'\b(Citra|Azahar|Lime3DS)\b'),
+    ('ds', r'\b(melonDS|DeSmuME)\b'),
+    ('gba', r'\b(mGBA|VBA-?M|VisualBoyAdvance)\b'),
+    ('gamecube-wii', r'\bDolphin\b'),
+    ('n64', r'\b(Mupen64\w*|simple64|RMG|Project64)\b'),
+    ('snes', r'\b(Snes9x|bsnes)\b'),
+    ('nes', r'\b(FCEUX|Mesen|Nestopia)\b'),
+    ('ps1', r'\b(DuckStation|ePSXe|PCSX-ReARMed)\b'),
+    ('ps2', r'\b(PCSX2|PS5SX2|AetherSX2|NetherSX2)\b'),
+    ('ps3', r'\bRPCS3\b'),
+    ('psp', r'\bPPSSPP\b'),
+    ('vita', r'\bVita3K\b'),
+    ('dreamcast', r'\b(Flycast|Redream|reicast)\b'),
+    ('saturn', r'\b(Yabause|Kronos|YabaSanshiro)\b'),
+    ('megadrive', r'\b(Genesis Plus\w*|BlastEm|PicoDrive)\b'),
+    ('xbox360', r'\bXenia\b'),
+    ('xbox', r'\bxemu\b'),
+    ('arcade', r'\b(MAME|FBNeo|FinalBurn)\b'),
+]
 
 
 def connect(host, port):
@@ -62,21 +96,99 @@ def rename(client, source, target):
             raise
 
 
-def remote_files(client, path, prefix=''):
-    """Files under a console folder, relative to it; empty when it does not exist."""
+def remote_files(client, path, prefix='', depth=0):
+    """Files under a console folder, relative to it; empty when it does not exist.
+
+    ftpsrv ignores MLSD's path argument and always lists the current folder, so this changes into
+    each folder and lists it without one.
+    """
     found = []
+    if depth > 8:
+        return found
     try:
-        entries = list(client.mlsd(path))
+        client.cwd(path)
+        entries = list(client.mlsd())
     except ftplib.error_perm:
         return found
+    finally:
+        client.cwd('/')
     for name, facts in entries:
         if name in ('.', '..'):
             continue
         if facts.get('type') == 'dir':
-            found += remote_files(client, f'{path}/{name}', f'{prefix}{name}/')
+            found += remote_files(client, f'{path}/{name}', f'{prefix}{name}/', depth + 1)
         elif facts.get('type') == 'file':
             found.append(f'{prefix}{name}')
     return found
+
+
+def remote_folders(client, path):
+    """Folder names in a console folder (see remote_files about ftpsrv's MLSD)."""
+    try:
+        client.cwd(path)
+        entries = list(client.mlsd())
+    except ftplib.error_perm:
+        return []
+    finally:
+        client.cwd('/')
+    return sorted(n for n, facts in entries if facts.get('type') == 'dir' and n not in ('.', '..'))
+
+
+def exists(client, path):
+    try:
+        client.size(path)
+        return True
+    except ftplib.error_perm:
+        return False
+
+
+def set_icon(client, app_id, icon):
+    """Puts icon on an installed app: its own copy, the installed copy and the home screen's.
+
+    The home screen draws the copy in /user/appmeta, made when the app was first registered, so
+    changing only the app's own icon0.png does not show.
+    """
+    changed = False
+    for path in (f'{HOMEBREW}/{app_id}/sce_sys/icon0.png', f'{APPS}/{app_id}/sce_sys/icon0.png',
+                 f'{APPMETA}/{app_id}/icon0.png'):
+        if exists(client, path) and read_remote(client, path) != icon:
+            write_remote(client, path, icon)
+            changed = True
+    return changed
+
+
+def label(slug):
+    local = LABELS / f'{slug}.png'
+    if local.is_file():
+        return local.read_bytes()
+    with urllib.request.urlopen(LABEL_URL.format(slug), timeout=30) as response:
+        return response.read()
+
+
+def app_name(param):
+    for value in param.get('localizedParameters', {}).values():
+        if isinstance(value, dict) and value.get('titleName'):
+            return value['titleName']
+    return ''
+
+
+def label_emulators(client, dry_run):
+    """Gives each installed emulator its console's label as home screen icon."""
+    for app_id in remote_folders(client, APPS):
+        if re.fullmatch(r'PPSA98\d{3}', app_id) and FIRST_TILE <= int(app_id[4:]) <= LAST_TILE:
+            continue  # a game tile
+        data = read_remote(client, f'{APPS}/{app_id}/sce_sys/param.json')
+        try:
+            name = app_name(json.loads(data)) if data else ''
+        except ValueError:
+            name = ''
+        slug = next((s for s, pattern in EMULATORS if re.search(pattern, f'{app_id} {name}', re.I)), None)
+        if not slug:
+            continue
+        if dry_run:
+            print(f'{app_id}  {name}: {slug} label')
+        elif set_icon(client, app_id, label(slug)):
+            print(f'{app_id}  {name}: {slug} label set')
 
 
 def read_remote(client, path):
@@ -151,6 +263,21 @@ def png_icon(tga_data):
             chunk(b'IDAT', zlib.compress(bytes(raw), 9)) + chunk(b'IEND', b''))
 
 
+def remove_stale(client, remote, wanted):
+    """Removes files a tile no longer has (from an earlier full copy), and their emptied folders."""
+    stale = sorted(set(remote_files(client, remote)) - wanted)
+    for relative in stale:
+        delete(client, f'{remote}/{relative}')
+    folders = {str(parent) for r in stale for parent in pathlib.PurePosixPath(r).parents} - {'.'}
+    for folder in sorted(folders, key=lambda f: f.count('/'), reverse=True):
+        try:
+            client.rmd(f'{remote}/{folder}')
+        except ftplib.Error:
+            pass  # still holds files the tile keeps
+    if stale:
+        print(f'  removed {len(stale)} old files from {remote}')
+
+
 def tile_param(param, tile_id, name):
     param = json.loads(json.dumps(param))
     number = tile_id[4:]
@@ -195,7 +322,9 @@ def main(argv):
     if not (app / 'eboot.bin').is_file() or not (app / 'sce_sys/param.json').is_file():
         sys.exit(f'{app} is not a tile starter or PPSA99008 folder')
     param = json.loads((app / 'sce_sys/param.json').read_text())
-    files = sorted(p for p in app.rglob('*') if p.is_file() and p.relative_to(app).as_posix() not in SKIPPED)
+    files = sorted(p for p in app.rglob('*') if p.is_file() and p.relative_to(app).as_posix() not in SKIPPED | {LAUNCHER})
+    # tile.txt names the starter too, so tiles of an older starter are copied again.
+    starter = zlib.crc32((app / 'eboot.bin').read_bytes()) & 0xffffffff
     wanted = {p.relative_to(app).as_posix() for p in files} | {'tile.txt'}
 
     with connect(options.host, options.port) as client:
@@ -210,22 +339,24 @@ def main(argv):
         plan = assign_tiles(games, tiles)
         for tile_id, game in plan:
             print(f'{tile_id}  {game["name"]}  ({game["file"]})')
+        label_emulators(client, options.dry_run)
         if options.dry_run or not plan:
             return
+        if (app / LAUNCHER).is_file():
+            launcher = (app / LAUNCHER).read_bytes()
+            if read_remote(client, f'{CONFIG.rsplit("/", 1)[0]}/{LAUNCHER}') != launcher:
+                write_remote(client, f'{CONFIG.rsplit("/", 1)[0]}/{LAUNCHER}', launcher)
+                print(f'  installed the tile launcher')
 
         for tile_id, game in plan:
             remote = f'{HOMEBREW}/{tile_id}'
             title = f'title={game["title_id"]}\n' if re.fullmatch(r'[0-9A-Fa-f]{16}', game.get('title_id', '')) else ''
-            tile_text = f'rom={game["file"]}\n{title}'.encode()
+            tile_text = f'rom={game["file"]}\n{title}starter={starter:08x}\n'.encode()
             # Run on a schedule, this only copies new games' tiles and tiles of an updated app.
             if not options.force and read_remote(client, f'{remote}/tile.txt') == tile_text:
-                try:
-                    current = client.size(f'{remote}/eboot.bin') == (app / 'eboot.bin').stat().st_size
-                except ftplib.error_perm:
-                    current = False
-                if current:
-                    print(f'  {tile_id} is up to date')
-                    continue
+                remove_stale(client, remote, wanted)
+                print(f'  {tile_id} is up to date')
+                continue
             icon = None
             if game.get('cover'):
                 cover = read_remote(client, game['cover'])
@@ -244,15 +375,9 @@ def main(argv):
                     data = local.read_bytes()
                 write_remote(client, f'{remote}/{relative}', data)
             write_remote(client, f'{remote}/tile.txt', tile_text)
-            stale = sorted(set(remote_files(client, remote)) - wanted)
-            for relative in stale:
-                delete(client, f'{remote}/{relative}')
-            folders = {str(parent) for r in stale for parent in pathlib.PurePosixPath(r).parents} - {'.'}
-            for folder in sorted(folders, key=lambda f: f.count('/'), reverse=True):
-                try:
-                    client.rmd(f'{remote}/{folder}')
-                except ftplib.Error:
-                    pass  # still holds files the tile keeps
+            if icon:
+                set_icon(client, tile_id, icon)
+            remove_stale(client, remote, wanted)
             print(f'  installed {remote}')
         write_remote(client, f'{CONFIG}/tiles.json', (json.dumps({'tiles': tiles}, indent=2) + '\n').encode())
     print(f'{len(plan)} tiles. Restart the PS5 (or your homebrew loader) if new ones do not appear.')
