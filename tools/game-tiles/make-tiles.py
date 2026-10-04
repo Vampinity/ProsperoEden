@@ -6,7 +6,9 @@
 
 APP_DIR is normally the tile starter folder (tools/game-tiles/starter, about 1.7 MB): each tile is
 then a small app, installed as /data/homebrew/PPSA98001-PPSA98999 with the game's name and cover in
-its sce_sys and a tile.txt naming the game, that asks websrv to start ProsperoEden with that game.
+its sce_sys and a tile.txt naming the game, that hands the game to the tile launcher
+(/data/prosperoeden/tile-launch.elf, installed from APP_DIR) through websrv and closes; the
+launcher starts ProsperoEden with that game once the tile is gone.
 APP_DIR can also be the PPSA99008 folder of a release ZIP (headless/game_tile.h): the tile is then
 a full copy of the app (about 80 MB) that runs the game itself. Files in a tile that APP_DIR does
 not have (from an earlier full copy) are removed. The 4K backgrounds and sound are never copied.
@@ -38,6 +40,7 @@ FIRST_TILE, LAST_TILE = 98001, 98999
 ICON_SIZE = 512
 SKIPPED = {'sce_sys/pic0.dds', 'sce_sys/pic1.dds', 'sce_sys/snd0.at9'}
 APPS, APPMETA = '/user/app', '/user/appmeta'
+LAUNCHER = 'tile-launch.elf'  # goes to CONFIG/.., not into the tiles
 LABELS = pathlib.Path(__file__).resolve().parent / 'labels'
 LABEL_URL = 'https://raw.githubusercontent.com/Vampinity/ProsperoEden/game-tiles/tools/game-tiles/labels/{}.png'
 # Installed emulators get their console's label (labels/<slug>.png) as home screen icon, found by
@@ -260,6 +263,21 @@ def png_icon(tga_data):
             chunk(b'IDAT', zlib.compress(bytes(raw), 9)) + chunk(b'IEND', b''))
 
 
+def remove_stale(client, remote, wanted):
+    """Removes files a tile no longer has (from an earlier full copy), and their emptied folders."""
+    stale = sorted(set(remote_files(client, remote)) - wanted)
+    for relative in stale:
+        delete(client, f'{remote}/{relative}')
+    folders = {str(parent) for r in stale for parent in pathlib.PurePosixPath(r).parents} - {'.'}
+    for folder in sorted(folders, key=lambda f: f.count('/'), reverse=True):
+        try:
+            client.rmd(f'{remote}/{folder}')
+        except ftplib.Error:
+            pass  # still holds files the tile keeps
+    if stale:
+        print(f'  removed {len(stale)} old files from {remote}')
+
+
 def tile_param(param, tile_id, name):
     param = json.loads(json.dumps(param))
     number = tile_id[4:]
@@ -304,7 +322,9 @@ def main(argv):
     if not (app / 'eboot.bin').is_file() or not (app / 'sce_sys/param.json').is_file():
         sys.exit(f'{app} is not a tile starter or PPSA99008 folder')
     param = json.loads((app / 'sce_sys/param.json').read_text())
-    files = sorted(p for p in app.rglob('*') if p.is_file() and p.relative_to(app).as_posix() not in SKIPPED)
+    files = sorted(p for p in app.rglob('*') if p.is_file() and p.relative_to(app).as_posix() not in SKIPPED | {LAUNCHER})
+    # tile.txt names the starter too, so tiles of an older starter are copied again.
+    starter = zlib.crc32((app / 'eboot.bin').read_bytes()) & 0xffffffff
     wanted = {p.relative_to(app).as_posix() for p in files} | {'tile.txt'}
 
     with connect(options.host, options.port) as client:
@@ -322,20 +342,21 @@ def main(argv):
         label_emulators(client, options.dry_run)
         if options.dry_run or not plan:
             return
+        if (app / LAUNCHER).is_file():
+            launcher = (app / LAUNCHER).read_bytes()
+            if read_remote(client, f'{CONFIG.rsplit("/", 1)[0]}/{LAUNCHER}') != launcher:
+                write_remote(client, f'{CONFIG.rsplit("/", 1)[0]}/{LAUNCHER}', launcher)
+                print(f'  installed the tile launcher')
 
         for tile_id, game in plan:
             remote = f'{HOMEBREW}/{tile_id}'
             title = f'title={game["title_id"]}\n' if re.fullmatch(r'[0-9A-Fa-f]{16}', game.get('title_id', '')) else ''
-            tile_text = f'rom={game["file"]}\n{title}'.encode()
+            tile_text = f'rom={game["file"]}\n{title}starter={starter:08x}\n'.encode()
             # Run on a schedule, this only copies new games' tiles and tiles of an updated app.
             if not options.force and read_remote(client, f'{remote}/tile.txt') == tile_text:
-                try:
-                    current = client.size(f'{remote}/eboot.bin') == (app / 'eboot.bin').stat().st_size
-                except ftplib.error_perm:
-                    current = False
-                if current:
-                    print(f'  {tile_id} is up to date')
-                    continue
+                remove_stale(client, remote, wanted)
+                print(f'  {tile_id} is up to date')
+                continue
             icon = None
             if game.get('cover'):
                 cover = read_remote(client, game['cover'])
@@ -356,15 +377,7 @@ def main(argv):
             write_remote(client, f'{remote}/tile.txt', tile_text)
             if icon:
                 set_icon(client, tile_id, icon)
-            stale = sorted(set(remote_files(client, remote)) - wanted)
-            for relative in stale:
-                delete(client, f'{remote}/{relative}')
-            folders = {str(parent) for r in stale for parent in pathlib.PurePosixPath(r).parents} - {'.'}
-            for folder in sorted(folders, key=lambda f: f.count('/'), reverse=True):
-                try:
-                    client.rmd(f'{remote}/{folder}')
-                except ftplib.Error:
-                    pass  # still holds files the tile keeps
+            remove_stale(client, remote, wanted)
             print(f'  installed {remote}')
         write_remote(client, f'{CONFIG}/tiles.json', (json.dumps({'tiles': tiles}, indent=2) + '\n').encode())
     print(f'{len(plan)} tiles. Restart the PS5 (or your homebrew loader) if new ones do not appear.')
