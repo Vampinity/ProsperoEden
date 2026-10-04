@@ -62,18 +62,27 @@ def rename(client, source, target):
             raise
 
 
-def remote_files(client, path, prefix=''):
-    """Files under a console folder, relative to it; empty when it does not exist."""
+def remote_files(client, path, prefix='', depth=0):
+    """Files under a console folder, relative to it; empty when it does not exist.
+
+    ftpsrv ignores MLSD's path argument and always lists the current folder, so this changes into
+    each folder and lists it without one.
+    """
     found = []
+    if depth > 8:
+        return found
     try:
-        entries = list(client.mlsd(path))
+        client.cwd(path)
+        entries = list(client.mlsd())
     except ftplib.error_perm:
         return found
+    finally:
+        client.cwd('/')
     for name, facts in entries:
         if name in ('.', '..'):
             continue
         if facts.get('type') == 'dir':
-            found += remote_files(client, f'{path}/{name}', f'{prefix}{name}/')
+            found += remote_files(client, f'{path}/{name}', f'{prefix}{name}/', depth + 1)
         elif facts.get('type') == 'file':
             found.append(f'{prefix}{name}')
     return found
