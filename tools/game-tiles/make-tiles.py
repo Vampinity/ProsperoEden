@@ -16,6 +16,10 @@ Library once after adding games. Which tile belongs to which game is kept in
 /data/prosperoeden/config/tiles.json, so running this again updates the same tiles and only adds
 new ones; a tile that is already up to date is skipped, so it can run on a schedule. Needs a running FTP server on the
 console (the Payload SDK's ftpsrv, port 2121) and Python 3 only.
+
+Every run also gives each installed emulator (ProsperoEden, and others listed in EMULATORS) its
+console's label as home screen icon, from labels/ next to this script or from GitHub, and puts a
+tile's cover where the home screen draws it (/user/appmeta). Restart the PS5 to see changed icons.
 """
 import argparse
 import ftplib
@@ -25,6 +29,7 @@ import pathlib
 import re
 import struct
 import sys
+import urllib.request
 import zlib
 
 CONFIG = '/data/prosperoeden/config'
@@ -32,6 +37,32 @@ HOMEBREW = '/data/homebrew'
 FIRST_TILE, LAST_TILE = 98001, 98999
 ICON_SIZE = 512
 SKIPPED = {'sce_sys/pic0.dds', 'sce_sys/pic1.dds', 'sce_sys/snd0.at9'}
+APPS, APPMETA = '/user/app', '/user/appmeta'
+LABELS = pathlib.Path(__file__).resolve().parent / 'labels'
+LABEL_URL = 'https://raw.githubusercontent.com/Vampinity/ProsperoEden/game-tiles/tools/game-tiles/labels/{}.png'
+# Installed emulators get their console's label (labels/<slug>.png) as home screen icon, found by
+# title ID or by the app's name. RetroArch runs many consoles and keeps its own icon.
+EMULATORS = [
+    ('switch', r'PPSA99008|ProsperoEden|\b(Eden|yuzu|suyu|Ryujinx|Citron|Sudachi)\b'),
+    ('3ds', r'\b(Citra|Azahar|Lime3DS)\b'),
+    ('ds', r'\b(melonDS|DeSmuME)\b'),
+    ('gba', r'\b(mGBA|VBA-?M|VisualBoyAdvance)\b'),
+    ('gamecube-wii', r'\bDolphin\b'),
+    ('n64', r'\b(Mupen64\w*|simple64|RMG|Project64)\b'),
+    ('snes', r'\b(Snes9x|bsnes)\b'),
+    ('nes', r'\b(FCEUX|Mesen|Nestopia)\b'),
+    ('ps1', r'\b(DuckStation|ePSXe|PCSX-ReARMed)\b'),
+    ('ps2', r'\b(PCSX2|PS5SX2|AetherSX2|NetherSX2)\b'),
+    ('ps3', r'\bRPCS3\b'),
+    ('psp', r'\bPPSSPP\b'),
+    ('vita', r'\bVita3K\b'),
+    ('dreamcast', r'\b(Flycast|Redream|reicast)\b'),
+    ('saturn', r'\b(Yabause|Kronos|YabaSanshiro)\b'),
+    ('megadrive', r'\b(Genesis Plus\w*|BlastEm|PicoDrive)\b'),
+    ('xbox360', r'\bXenia\b'),
+    ('xbox', r'\bxemu\b'),
+    ('arcade', r'\b(MAME|FBNeo|FinalBurn)\b'),
+]
 
 
 def connect(host, port):
@@ -86,6 +117,75 @@ def remote_files(client, path, prefix='', depth=0):
         elif facts.get('type') == 'file':
             found.append(f'{prefix}{name}')
     return found
+
+
+def remote_folders(client, path):
+    """Folder names in a console folder (see remote_files about ftpsrv's MLSD)."""
+    try:
+        client.cwd(path)
+        entries = list(client.mlsd())
+    except ftplib.error_perm:
+        return []
+    finally:
+        client.cwd('/')
+    return sorted(n for n, facts in entries if facts.get('type') == 'dir' and n not in ('.', '..'))
+
+
+def exists(client, path):
+    try:
+        client.size(path)
+        return True
+    except ftplib.error_perm:
+        return False
+
+
+def set_icon(client, app_id, icon):
+    """Puts icon on an installed app: its own copy, the installed copy and the home screen's.
+
+    The home screen draws the copy in /user/appmeta, made when the app was first registered, so
+    changing only the app's own icon0.png does not show.
+    """
+    changed = False
+    for path in (f'{HOMEBREW}/{app_id}/sce_sys/icon0.png', f'{APPS}/{app_id}/sce_sys/icon0.png',
+                 f'{APPMETA}/{app_id}/icon0.png'):
+        if exists(client, path) and read_remote(client, path) != icon:
+            write_remote(client, path, icon)
+            changed = True
+    return changed
+
+
+def label(slug):
+    local = LABELS / f'{slug}.png'
+    if local.is_file():
+        return local.read_bytes()
+    with urllib.request.urlopen(LABEL_URL.format(slug), timeout=30) as response:
+        return response.read()
+
+
+def app_name(param):
+    for value in param.get('localizedParameters', {}).values():
+        if isinstance(value, dict) and value.get('titleName'):
+            return value['titleName']
+    return ''
+
+
+def label_emulators(client, dry_run):
+    """Gives each installed emulator its console's label as home screen icon."""
+    for app_id in remote_folders(client, APPS):
+        if re.fullmatch(r'PPSA98\d{3}', app_id) and FIRST_TILE <= int(app_id[4:]) <= LAST_TILE:
+            continue  # a game tile
+        data = read_remote(client, f'{APPS}/{app_id}/sce_sys/param.json')
+        try:
+            name = app_name(json.loads(data)) if data else ''
+        except ValueError:
+            name = ''
+        slug = next((s for s, pattern in EMULATORS if re.search(pattern, f'{app_id} {name}', re.I)), None)
+        if not slug:
+            continue
+        if dry_run:
+            print(f'{app_id}  {name}: {slug} label')
+        elif set_icon(client, app_id, label(slug)):
+            print(f'{app_id}  {name}: {slug} label set')
 
 
 def read_remote(client, path):
@@ -219,6 +319,7 @@ def main(argv):
         plan = assign_tiles(games, tiles)
         for tile_id, game in plan:
             print(f'{tile_id}  {game["name"]}  ({game["file"]})')
+        label_emulators(client, options.dry_run)
         if options.dry_run or not plan:
             return
 
@@ -253,6 +354,8 @@ def main(argv):
                     data = local.read_bytes()
                 write_remote(client, f'{remote}/{relative}', data)
             write_remote(client, f'{remote}/tile.txt', tile_text)
+            if icon:
+                set_icon(client, tile_id, icon)
             stale = sorted(set(remote_files(client, remote)) - wanted)
             for relative in stale:
                 delete(client, f'{remote}/{relative}')
