@@ -40,9 +40,43 @@ ICON_SIZE = 512
 SKIPPED = {'sce_sys/pic0.dds', 'sce_sys/pic1.dds', 'sce_sys/snd0.at9'}
 APPS, APPMETA = '/user/app', '/user/appmeta'
 LAUNCHER = 'tile-launch.elf'  # goes to CONFIG/.., not into the tiles
-# The console a tile's game is for, shown in front of its name under the tile the way the home
-# screen marks PS4 games. ProsperoEden's games are Switch games; --console changes it.
-CONSOLE = 'Switch'
+# The console a tile's game is for goes in front of its name under the tile ("[Switch] ..."), the
+# way the home screen marks PS4 games. It comes from the game's own "console", "platform" or
+# "system" field in the library, else from its file's extension, else from the emulator that runs
+# it. Short labels, so the name still fits under the tile.
+CONSOLES = {
+    'switch': 'Switch', '3ds': '3DS', 'ds': 'DS', 'gba': 'GBA', 'gbc': 'Game Boy Color',
+    'gb': 'Game Boy', 'gamecube': 'GameCube', 'wii': 'Wii', 'wiiu': 'Wii U', 'n64': 'N64',
+    'snes': 'SNES', 'nes': 'NES', 'ps1': 'PS1', 'ps2': 'PS2', 'ps3': 'PS3', 'psp': 'PSP',
+    'vita': 'PS Vita', 'dreamcast': 'Dreamcast', 'saturn': 'Saturn', 'megadrive': 'Mega Drive',
+    'mastersystem': 'Master System', 'xbox': 'Xbox', 'xbox360': 'Xbox 360', 'arcade': 'Arcade',
+    'pc': 'PC',
+}
+ALIASES = {
+    'nintendo switch': 'switch', 'nx': 'switch', 'nintendo 3ds': '3ds', 'nintendo ds': 'ds',
+    'game boy advance': 'gba', 'gameboy advance': 'gba', 'game boy color': 'gbc',
+    'gameboy color': 'gbc', 'game boy': 'gb', 'gameboy': 'gb', 'nintendo gamecube': 'gamecube',
+    'gc': 'gamecube', 'nintendo wii': 'wii', 'nintendo wii u': 'wiiu', 'wii u': 'wiiu',
+    'nintendo 64': 'n64', 'super nintendo': 'snes', 'super nes': 'snes', 'super famicom': 'snes',
+    'famicom': 'nes', 'nintendo entertainment system': 'nes', 'playstation': 'ps1', 'psx': 'ps1',
+    'ps': 'ps1', 'playstation 2': 'ps2', 'playstation 3': 'ps3', 'playstation portable': 'psp',
+    'playstation vita': 'vita', 'ps vita': 'vita', 'psvita': 'vita', 'sega dreamcast': 'dreamcast',
+    'sega saturn': 'saturn', 'genesis': 'megadrive', 'sega genesis': 'megadrive',
+    'mega drive': 'megadrive', 'sega mega drive': 'megadrive', 'master system': 'mastersystem',
+    'sega master system': 'mastersystem', 'xbox 360': 'xbox360', 'mame': 'arcade',
+    'fbneo': 'arcade', 'windows': 'pc', 'steam': 'pc', 'linux': 'pc', 'dos': 'pc',
+}
+EXTENSIONS = {
+    'switch': '.nsp .nsz .xci .xcz .nro .nca', '3ds': '.3ds .cia .cci .cxi', 'ds': '.nds',
+    'gba': '.gba', 'gbc': '.gbc', 'gb': '.gb', 'gamecube': '.gcm .gcz .rvz', 'wii': '.wbfs .wad',
+    'wiiu': '.wua .wux .rpx', 'n64': '.n64 .z64 .v64', 'snes': '.sfc .smc', 'nes': '.nes',
+    'psp': '.cso', 'vita': '.vpk', 'dreamcast': '.gdi .cdi', 'megadrive': '.md .gen .smd',
+    'mastersystem': '.sms', 'xbox360': '.xex', 'pc': '.exe .lnk .url',
+}
+EXTENSION_CONSOLE = {ext: key for key, exts in EXTENSIONS.items() for ext in exts.split()}
+# Emulators whose Library make-tiles.py reads, and the console their games are for when a game's
+# entry and file do not say (.iso, .chd and .bin are used by many consoles).
+EMULATOR_CONSOLE = {'PPSA99008': 'switch'}
 
 
 def connect(host, port):
@@ -120,6 +154,18 @@ def set_icon(client, app_id, icon):
             write_remote(client, path, icon)
             changed = True
     return changed
+
+
+def console_label(game, emulator='PPSA99008'):
+    """The short console name for a Library game (see CONSOLES), or '' when it is not known."""
+    for field in ('console', 'platform', 'system'):
+        value = str(game.get(field) or '').strip().lower()
+        key = value if value in CONSOLES else ALIASES.get(value)
+        if key:
+            return CONSOLES[key]
+    extension = pathlib.PurePosixPath(game.get('file', '')).suffix.lower()
+    key = EXTENSION_CONSOLE.get(extension) or EMULATOR_CONSOLE.get(emulator)
+    return CONSOLES.get(key, '')
 
 
 def restore_icon(client, app_id):
@@ -254,7 +300,8 @@ def main(argv):
     parser.add_argument('--port', type=int, default=2121)
     parser.add_argument('--only', help='only the games whose name contains this text')
     parser.add_argument('--dry-run', action='store_true', help='list the tiles without changing the console')
-    parser.add_argument('--console', default=CONSOLE, help=f'console shown in front of game names (default {CONSOLE})')
+    parser.add_argument('--console', help="console shown in front of every game's name, instead of each game's own"
+                        " ('' for none)")
     parser.add_argument('--force', action='store_true', help='copy tiles again even when they are up to date')
     options = parser.parse_args(argv)
     app = options.app
@@ -290,7 +337,8 @@ def main(argv):
         for tile_id, game in plan:
             remote = f'{HOMEBREW}/{tile_id}'
             title = f'title={game["title_id"]}\n' if re.fullmatch(r'[0-9A-Fa-f]{16}', game.get('title_id', '')) else ''
-            name = f'[{options.console}] {game["name"]}' if options.console else game['name']
+            console = console_label(game) if options.console is None else options.console
+            name = f'[{console}] {game["name"]}' if console else game['name']
             tile_text = f'rom={game["file"]}\n{title}name={name}\nstarter={starter:08x}\n'.encode()
             # Run on a schedule, this only copies new games' tiles and tiles of an updated app.
             if not options.force and read_remote(client, f'{remote}/tile.txt') == tile_text:
