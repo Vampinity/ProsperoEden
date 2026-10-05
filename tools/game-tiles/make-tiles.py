@@ -19,9 +19,9 @@ Library once after adding games. Which tile belongs to which game is kept in
 new ones; a tile that is already up to date is skipped, so it can run on a schedule. Needs a running FTP server on the
 console (the Payload SDK's ftpsrv, port 2121) and Python 3 only.
 
-Every run also gives each installed emulator (ProsperoEden, and others listed in EMULATORS) its
-console's label as home screen icon, from labels/ next to this script or from GitHub, and puts a
-tile's cover where the home screen draws it (/user/appmeta). Restart the PS5 to see changed icons.
+Each tile's name starts with the console its game is for ("[Switch] ..."), like the home screen
+marks PS4 games, and its cover is also put where the home screen draws it (/user/appmeta).
+Restart the PS5 to see changed names and icons.
 """
 import argparse
 import ftplib
@@ -31,7 +31,6 @@ import pathlib
 import re
 import struct
 import sys
-import urllib.request
 import zlib
 
 CONFIG = '/data/prosperoeden/config'
@@ -41,31 +40,43 @@ ICON_SIZE = 512
 SKIPPED = {'sce_sys/pic0.dds', 'sce_sys/pic1.dds', 'sce_sys/snd0.at9'}
 APPS, APPMETA = '/user/app', '/user/appmeta'
 LAUNCHER = 'tile-launch.elf'  # goes to CONFIG/.., not into the tiles
-LABELS = pathlib.Path(__file__).resolve().parent / 'labels'
-LABEL_URL = 'https://raw.githubusercontent.com/Vampinity/ProsperoEden/game-tiles/tools/game-tiles/labels/{}.png'
-# Installed emulators get their console's label (labels/<slug>.png) as home screen icon, found by
-# title ID or by the app's name. RetroArch runs many consoles and keeps its own icon.
-EMULATORS = [
-    ('switch', r'PPSA99008|ProsperoEden|\b(Eden|yuzu|suyu|Ryujinx|Citron|Sudachi)\b'),
-    ('3ds', r'\b(Citra|Azahar|Lime3DS)\b'),
-    ('ds', r'\b(melonDS|DeSmuME)\b'),
-    ('gba', r'\b(mGBA|VBA-?M|VisualBoyAdvance)\b'),
-    ('gamecube-wii', r'\bDolphin\b'),
-    ('n64', r'\b(Mupen64\w*|simple64|RMG|Project64)\b'),
-    ('snes', r'\b(Snes9x|bsnes)\b'),
-    ('nes', r'\b(FCEUX|Mesen|Nestopia)\b'),
-    ('ps1', r'\b(DuckStation|ePSXe|PCSX-ReARMed)\b'),
-    ('ps2', r'\b(PCSX2|PS5SX2|AetherSX2|NetherSX2)\b'),
-    ('ps3', r'\bRPCS3\b'),
-    ('psp', r'\bPPSSPP\b'),
-    ('vita', r'\bVita3K\b'),
-    ('dreamcast', r'\b(Flycast|Redream|reicast)\b'),
-    ('saturn', r'\b(Yabause|Kronos|YabaSanshiro)\b'),
-    ('megadrive', r'\b(Genesis Plus\w*|BlastEm|PicoDrive)\b'),
-    ('xbox360', r'\bXenia\b'),
-    ('xbox', r'\bxemu\b'),
-    ('arcade', r'\b(MAME|FBNeo|FinalBurn)\b'),
-]
+# The console a tile's game is for goes in front of its name under the tile ("[Switch] ..."), the
+# way the home screen marks PS4 games. It comes from the game's own "console", "platform" or
+# "system" field in the library, else from its file's extension, else from the emulator that runs
+# it. Short labels, so the name still fits under the tile.
+CONSOLES = {
+    'switch': 'Switch', '3ds': '3DS', 'ds': 'DS', 'gba': 'GBA', 'gbc': 'Game Boy Color',
+    'gb': 'Game Boy', 'gamecube': 'GameCube', 'wii': 'Wii', 'wiiu': 'Wii U', 'n64': 'N64',
+    'snes': 'SNES', 'nes': 'NES', 'ps1': 'PS1', 'ps2': 'PS2', 'ps3': 'PS3', 'psp': 'PSP',
+    'vita': 'PS Vita', 'dreamcast': 'Dreamcast', 'saturn': 'Saturn', 'megadrive': 'Mega Drive',
+    'mastersystem': 'Master System', 'xbox': 'Xbox', 'xbox360': 'Xbox 360', 'arcade': 'Arcade',
+    'pc': 'PC',
+}
+ALIASES = {
+    'nintendo switch': 'switch', 'nx': 'switch', 'nintendo 3ds': '3ds', 'nintendo ds': 'ds',
+    'game boy advance': 'gba', 'gameboy advance': 'gba', 'game boy color': 'gbc',
+    'gameboy color': 'gbc', 'game boy': 'gb', 'gameboy': 'gb', 'nintendo gamecube': 'gamecube',
+    'gc': 'gamecube', 'nintendo wii': 'wii', 'nintendo wii u': 'wiiu', 'wii u': 'wiiu',
+    'nintendo 64': 'n64', 'super nintendo': 'snes', 'super nes': 'snes', 'super famicom': 'snes',
+    'famicom': 'nes', 'nintendo entertainment system': 'nes', 'playstation': 'ps1', 'psx': 'ps1',
+    'ps': 'ps1', 'playstation 2': 'ps2', 'playstation 3': 'ps3', 'playstation portable': 'psp',
+    'playstation vita': 'vita', 'ps vita': 'vita', 'psvita': 'vita', 'sega dreamcast': 'dreamcast',
+    'sega saturn': 'saturn', 'genesis': 'megadrive', 'sega genesis': 'megadrive',
+    'mega drive': 'megadrive', 'sega mega drive': 'megadrive', 'master system': 'mastersystem',
+    'sega master system': 'mastersystem', 'xbox 360': 'xbox360', 'mame': 'arcade',
+    'fbneo': 'arcade', 'windows': 'pc', 'steam': 'pc', 'linux': 'pc', 'dos': 'pc',
+}
+EXTENSIONS = {
+    'switch': '.nsp .nsz .xci .xcz .nro .nca', '3ds': '.3ds .cia .cci .cxi', 'ds': '.nds',
+    'gba': '.gba', 'gbc': '.gbc', 'gb': '.gb', 'gamecube': '.gcm .gcz .rvz', 'wii': '.wbfs .wad',
+    'wiiu': '.wua .wux .rpx', 'n64': '.n64 .z64 .v64', 'snes': '.sfc .smc', 'nes': '.nes',
+    'psp': '.cso', 'vita': '.vpk', 'dreamcast': '.gdi .cdi', 'megadrive': '.md .gen .smd',
+    'mastersystem': '.sms', 'xbox360': '.xex', 'pc': '.exe .lnk .url',
+}
+EXTENSION_CONSOLE = {ext: key for key, exts in EXTENSIONS.items() for ext in exts.split()}
+# Emulators whose Library make-tiles.py reads, and the console their games are for when a game's
+# entry and file do not say (.iso, .chd and .bin are used by many consoles).
+EMULATOR_CONSOLE = {'PPSA99008': 'switch'}
 
 
 def connect(host, port):
@@ -122,18 +133,6 @@ def remote_files(client, path, prefix='', depth=0):
     return found
 
 
-def remote_folders(client, path):
-    """Folder names in a console folder (see remote_files about ftpsrv's MLSD)."""
-    try:
-        client.cwd(path)
-        entries = list(client.mlsd())
-    except ftplib.error_perm:
-        return []
-    finally:
-        client.cwd('/')
-    return sorted(n for n, facts in entries if facts.get('type') == 'dir' and n not in ('.', '..'))
-
-
 def exists(client, path):
     try:
         client.size(path)
@@ -157,38 +156,23 @@ def set_icon(client, app_id, icon):
     return changed
 
 
-def label(slug):
-    local = LABELS / f'{slug}.png'
-    if local.is_file():
-        return local.read_bytes()
-    with urllib.request.urlopen(LABEL_URL.format(slug), timeout=30) as response:
-        return response.read()
+def console_label(game, emulator='PPSA99008'):
+    """The short console name for a Library game (see CONSOLES), or '' when it is not known."""
+    for field in ('console', 'platform', 'system'):
+        value = str(game.get(field) or '').strip().lower()
+        key = value if value in CONSOLES else ALIASES.get(value)
+        if key:
+            return CONSOLES[key]
+    extension = pathlib.PurePosixPath(game.get('file', '')).suffix.lower()
+    key = EXTENSION_CONSOLE.get(extension) or EMULATOR_CONSOLE.get(emulator)
+    return CONSOLES.get(key, '')
 
 
-def app_name(param):
-    for value in param.get('localizedParameters', {}).values():
-        if isinstance(value, dict) and value.get('titleName'):
-            return value['titleName']
-    return ''
-
-
-def label_emulators(client, dry_run):
-    """Gives each installed emulator its console's label as home screen icon."""
-    for app_id in remote_folders(client, APPS):
-        if re.fullmatch(r'PPSA98\d{3}', app_id) and FIRST_TILE <= int(app_id[4:]) <= LAST_TILE:
-            continue  # a game tile
-        data = read_remote(client, f'{APPS}/{app_id}/sce_sys/param.json')
-        try:
-            name = app_name(json.loads(data)) if data else ''
-        except ValueError:
-            name = ''
-        slug = next((s for s, pattern in EMULATORS if re.search(pattern, f'{app_id} {name}', re.I)), None)
-        if not slug:
-            continue
-        if dry_run:
-            print(f'{app_id}  {name}: {slug} label')
-        elif set_icon(client, app_id, label(slug)):
-            print(f'{app_id}  {name}: {slug} label set')
+def restore_icon(client, app_id):
+    """Shows an app's own icon0.png on the home screen again (see set_icon)."""
+    own = read_remote(client, f'{HOMEBREW}/{app_id}/sce_sys/icon0.png')
+    if own and set_icon(client, app_id, own):
+        print(f'  {app_id} shows its own icon again')
 
 
 def read_remote(client, path):
@@ -316,6 +300,8 @@ def main(argv):
     parser.add_argument('--port', type=int, default=2121)
     parser.add_argument('--only', help='only the games whose name contains this text')
     parser.add_argument('--dry-run', action='store_true', help='list the tiles without changing the console')
+    parser.add_argument('--console', help="console shown in front of every game's name, instead of each game's own"
+                        " ('' for none)")
     parser.add_argument('--force', action='store_true', help='copy tiles again even when they are up to date')
     options = parser.parse_args(argv)
     app = options.app
@@ -339,9 +325,9 @@ def main(argv):
         plan = assign_tiles(games, tiles)
         for tile_id, game in plan:
             print(f'{tile_id}  {game["name"]}  ({game["file"]})')
-        label_emulators(client, options.dry_run)
         if options.dry_run or not plan:
             return
+        restore_icon(client, 'PPSA99008')  # an earlier version put a console label on it
         if (app / LAUNCHER).is_file():
             launcher = (app / LAUNCHER).read_bytes()
             if read_remote(client, f'{CONFIG.rsplit("/", 1)[0]}/{LAUNCHER}') != launcher:
@@ -351,7 +337,9 @@ def main(argv):
         for tile_id, game in plan:
             remote = f'{HOMEBREW}/{tile_id}'
             title = f'title={game["title_id"]}\n' if re.fullmatch(r'[0-9A-Fa-f]{16}', game.get('title_id', '')) else ''
-            tile_text = f'rom={game["file"]}\n{title}starter={starter:08x}\n'.encode()
+            console = console_label(game) if options.console is None else options.console
+            name = f'[{console}] {game["name"]}' if console else game['name']
+            tile_text = f'rom={game["file"]}\n{title}name={name}\nstarter={starter:08x}\n'.encode()
             # Run on a schedule, this only copies new games' tiles and tiles of an updated app.
             if not options.force and read_remote(client, f'{remote}/tile.txt') == tile_text:
                 remove_stale(client, remote, wanted)
@@ -368,13 +356,17 @@ def main(argv):
                 relative = local.relative_to(app).as_posix()
                 ensure_directory(client, f'{remote}/{relative}'.rsplit('/', 1)[0])
                 if relative == 'sce_sys/param.json':
-                    data = (json.dumps(tile_param(param, tile_id, game['name']), indent=2) + '\n').encode()
+                    data = (json.dumps(tile_param(param, tile_id, name), indent=2) + '\n').encode()
                 elif relative == 'sce_sys/icon0.png' and icon:
                     data = icon
                 else:
                     data = local.read_bytes()
                 write_remote(client, f'{remote}/{relative}', data)
             write_remote(client, f'{remote}/tile.txt', tile_text)
+            # The installed copy keeps the name from when the tile was first registered.
+            if exists(client, f'{APPS}/{tile_id}/sce_sys/param.json'):
+                write_remote(client, f'{APPS}/{tile_id}/sce_sys/param.json',
+                             (json.dumps(tile_param(param, tile_id, name), indent=2) + '\n').encode())
             if icon:
                 set_icon(client, tile_id, icon)
             remove_stale(client, remote, wanted)
