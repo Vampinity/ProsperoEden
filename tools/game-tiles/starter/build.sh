@@ -24,9 +24,12 @@ cp "$work/dist/PPSA99999/sce_sys/param.json" "$work/dist/PPSA99999/sce_sys/icon0
 sdk=$work/.deps/native/ps5-payload-sdk
 "$sdk/bin/prospero-clang" -Wall -Werror -O2 -o "$out/tile-launch.elf" "$here/../launcher/tile-launch.c" \
     -lkernel_sys -lSceSystemService -lSceUserService
+# Read-only home screen dump for the console badge research (../homeui-dump), next to the starter.
+"$sdk/bin/prospero-clang" -Wall -Werror -O2 -o "$root/dist/homeui-dump.elf" "$here/../homeui-dump/homeui-dump.c" \
+    -lkernel_sys
 # make-tiles.py and its console badges go next to the starter, so the ZIP has all a Mac needs.
 rm -rf "$root/dist/make-tiles.py" "$root/dist/badges" && mkdir -p "$root/dist/badges"
 cp "$here/../make-tiles.py" "$root/dist/"
 cp "$here/../badges/"*.png "$root/dist/badges/"
-(cd "$root/dist" && rm -f tile-starter.zip && zip -qr tile-starter.zip tile-starter make-tiles.py badges)
+(cd "$root/dist" && rm -f tile-starter.zip && zip -qr tile-starter.zip tile-starter make-tiles.py badges homeui-dump.elf)
 echo "Built $out"
