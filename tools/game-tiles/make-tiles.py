@@ -15,8 +15,8 @@ a full copy of the app (about 80 MB) that runs the game itself. Files in a tile 
 not have (from an earlier full copy) are removed. The 4K backgrounds and sound are never copied.
 
 The games come from /data/prosperoeden/config/library.json, which the Library writes: open the
-Library once after adding games. Which tile belongs to which game is kept in
-/data/prosperoeden/config/tiles.json, so running this again updates the same tiles and only adds
+Library once after adding games. Which tile belongs to which game (and the game's console, as
+a CONSOLES key such as "switch") is kept in /data/prosperoeden/config/tiles.json, so running this again updates the same tiles and only adds
 new ones; a tile that is already up to date is skipped, so it can run on a schedule. Needs a running FTP server on the
 console (the Payload SDK's ftpsrv, port 2121) and Python 3 only.
 
@@ -438,6 +438,8 @@ def main(argv):
             remote = f'{HOMEBREW}/{tile_id}'
             title = f'title={game["title_id"]}\n' if re.fullmatch(r'[0-9A-Fa-f]{16}', game.get('title_id', '')) else ''
             key = console_key(options.console) if options.console else game_console(game)
+            # tiles.json names each game's console too, for dashboards that show it.
+            next(e for e in tiles if e['tile'] == tile_id)['console'] = key or ''
             name = game['name']
             if options.label == 'text' and key:
                 name = f'[{CONSOLES[key]}] {name}'
