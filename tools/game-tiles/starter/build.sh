@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Builds the game tile starter (main.cpp) with the PS5 Native App Boilerplate and writes
 # dist/tile-starter/ (eboot.bin, sce_module/libc.prx, sce_sys/param.json, sce_sys/icon0.png) and
-# dist/tile-starter.zip, which tools/game-tiles/make-tiles.py installs as each game's tile, and
+# dist/tile-starter.zip (with make-tiles.py and badges/), which make-tiles.py installs as each game's tile, and
 # the tile launcher payload (../launcher/tile-launch.c) as dist/tile-starter/tile-launch.elf.
 # Needs what the boilerplate needs (Clang 18, lld 18, make, ninja, wget, unzip).
 set -euo pipefail
@@ -24,5 +24,9 @@ cp "$work/dist/PPSA99999/sce_sys/param.json" "$work/dist/PPSA99999/sce_sys/icon0
 sdk=$work/.deps/native/ps5-payload-sdk
 "$sdk/bin/prospero-clang" -Wall -Werror -O2 -o "$out/tile-launch.elf" "$here/../launcher/tile-launch.c" \
     -lkernel_sys -lSceSystemService -lSceUserService
-(cd "$root/dist" && rm -f tile-starter.zip && zip -qr tile-starter.zip tile-starter)
+# make-tiles.py and its console badges go next to the starter, so the ZIP has all a Mac needs.
+rm -rf "$root/dist/make-tiles.py" "$root/dist/badges" && mkdir -p "$root/dist/badges"
+cp "$here/../make-tiles.py" "$root/dist/"
+cp "$here/../badges/"*.png "$root/dist/badges/"
+(cd "$root/dist" && rm -f tile-starter.zip && zip -qr tile-starter.zip tile-starter make-tiles.py badges)
 echo "Built $out"
