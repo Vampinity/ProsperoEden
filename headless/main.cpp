@@ -33,6 +33,7 @@
 #include "devices.h"
 #include "diagnostics.h"
 #include "display_refresh.h"
+#include "remote_play.h"
 #include "log_pipe.h"
 #include "mods.h"
 #include "controller_applet.h"
@@ -759,25 +760,43 @@ int main(int argc, char** argv) {
                 Settings::ScalingFilter::Bilinear, Settings::ScalingFilter::Fsr, Settings::ScalingFilter::Bicubic,
                 Settings::ScalingFilter::NearestNeighbor};
             const auto video = Eden::LoadPreferences();
-            const int resolution = game_video.resolution >= 0 ? game_video.resolution : video.resolution;
+            int resolution = game_video.resolution >= 0 ? game_video.resolution : video.resolution;
             const int filter = game_video.upscaling_filter >= 0 ? game_video.upscaling_filter : video.upscaling_filter;
+            int refresh = game_video.refresh >= 0 ? game_video.refresh : video.refresh;
+            int output = video.output;
+            // Portal mode (remote_play.h): while Remote Play streams the console, nothing above
+            // what the stream can show.
+            if (Eden::Settings::Bool(Eden::Settings::Load(Eden::SettingsFile()),
+                                     Eden::Settings::Json::json_pointer("/video/portal_mode"), true)) {
+                const auto remote = Eden::RemotePlay::Check();
+                std::string changes;
+                if (remote.connected) {
+                    const auto capped = Eden::RemotePlay::Cap({resolution, refresh, output}, changes,
+                                                              Eden::kNativeResolution);
+                    resolution = capped.resolution;
+                    refresh = capped.refresh;
+                    output = capped.output;
+                }
+                Eden::Report("launch", ("Portal mode: " + Eden::RemotePlay::Describe(remote) +
+                                        (remote.connected ? (changes.empty() ? "; nothing to change" :
+                                                             "; using " + changes) : std::string{})).c_str());
+            }
             Settings::values.resolution_setup.SetValue(resolutions[resolution]);
             Settings::values.scaling_filter.SetValue(filters[filter]);
             Settings::UpdateRescalingInfo();
             // The output's refresh rate while the game runs (display_refresh.h): the renderer asks
             // for it as it opens the output.
-            const int refresh = game_video.refresh >= 0 ? game_video.refresh : video.refresh;
             Eden::Display::requested_hz.store(Eden::kRefreshHz[refresh]);
             Eden::Display::output_millihertz.store(0);
             setenv(Eden::Display::kVulkanSwitch, refresh ? "1" : "0", 1);
             Eden::Display::game_millihertz.store(60000);
             Eden::Display::skipped_frames.store(0);
             // The size of the picture the session puts out (Settings > Video > Output resolution).
-            Eden::Display::output_width.store(Eden::kOutputWidth[video.output]);
-            Eden::Display::output_height.store(Eden::kOutputHeight[video.output]);
+            Eden::Display::output_width.store(Eden::kOutputWidth[output]);
+            Eden::Display::output_height.store(Eden::kOutputHeight[output]);
             Eden::Report("launch", (std::string("Resolution ") + Eden::kResolutionKeys[resolution] + ", " +
                                     Eden::kUpscalingFilterLabels[filter] + ", output " +
-                                    Eden::kOutputKeys[video.output] + ", " + Eden::kRefreshKeys[refresh] +
+                                    Eden::kOutputKeys[output] + ", " + Eden::kRefreshKeys[refresh] +
                                     " Hz").c_str());
             // What a crash report says was running.
             char title_id[20];

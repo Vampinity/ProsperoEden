@@ -51,6 +51,7 @@ The complete ProsperoEden source is in this repository: the PS5 frontend and lau
 - **Game updates and DLC** - put update and DLC files (NSP or XCI) in the `updates` folder next to `roms`. They apply when the game starts, and each game's details show the update version and DLC count.
 - **Mods** - patches, replacement game files and cheats for a game, from a `mods` folder next to `roms`, each switched on or off in the game's settings (Triangle in the Library, then **Mods**).
 - **Shader cache** - shaders compiled in earlier sessions are loaded when a game starts, so an effect stutters only the first time it appears.
+- **Portal mode** - when a game starts while Remote Play (a PlayStation Portal or the PS Remote Play app) is streaming the console, that session renders at most 1x, 60 Hz and 1080p, which is all the stream can show. Settings already within that are left alone, and your saved settings are not changed. Set `"portal_mode": false` under `"video"` in the settings file to switch it off.
 - **In-game shortcuts** - a performance overlay (Select + R1), and Select + L1 to end the game and return to the library.
 - **Settings in one place** - a single JSON file under `/data/prosperoeden`, with game volume, mute, and detailed logging options. Logs keep the previous session.
 - **Now playing** - while a game runs, `/data/prosperoeden/config/now-playing.json` names it (title, title ID, file, cover, start time), so a home dashboard can show it; it stays with `"playing": false` when the game ends.
