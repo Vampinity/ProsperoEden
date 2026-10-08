@@ -3,6 +3,7 @@
 """Makes a PS5 home screen tile for each game in ProsperoEden's Library, over FTP.
 
   tools/game-tiles/make-tiles.py HOST APP_DIR [--port 2121] [--only NAME] [--dry-run]
+                                 [--label badge|text|none] [--console NAME] [--force]
 
 APP_DIR is normally the tile starter folder (tools/game-tiles/starter, about 1.7 MB): each tile is
 then a small app, installed as /data/homebrew/PPSA98001-PPSA98999 with the game's name and cover in
@@ -14,14 +15,15 @@ a full copy of the app (about 80 MB) that runs the game itself. Files in a tile 
 not have (from an earlier full copy) are removed. The 4K backgrounds and sound are never copied.
 
 The games come from /data/prosperoeden/config/library.json, which the Library writes: open the
-Library once after adding games. Which tile belongs to which game is kept in
-/data/prosperoeden/config/tiles.json, so running this again updates the same tiles and only adds
+Library once after adding games. Which tile belongs to which game (and the game's console, as
+a CONSOLES key such as "switch") is kept in /data/prosperoeden/config/tiles.json, so running this again updates the same tiles and only adds
 new ones; a tile that is already up to date is skipped, so it can run on a schedule. Needs a running FTP server on the
 console (the Payload SDK's ftpsrv, port 2121) and Python 3 only.
 
-Each tile's name starts with the console its game is for ("[Switch] ..."), like the home screen
-marks PS4 games, and its cover is also put where the home screen draws it (/user/appmeta).
-Restart the PS5 to see changed names and icons.
+Each tile shows the console its game is for: by default as a badge in the top-left corner of its
+picture (badges/<console>.png, next to this script), or with --label text in front of its name
+("[Switch] ..."). Its name and picture are also put where the home screen keeps its own copies
+(/user/app and /user/appmeta). Restart the PS5 to see changed names and icons.
 """
 import argparse
 import ftplib
@@ -40,8 +42,10 @@ ICON_SIZE = 512
 SKIPPED = {'sce_sys/pic0.dds', 'sce_sys/pic1.dds', 'sce_sys/snd0.at9'}
 APPS, APPMETA = '/user/app', '/user/appmeta'
 LAUNCHER = 'tile-launch.elf'  # goes to CONFIG/.., not into the tiles
-# The console a tile's game is for goes in front of its name under the tile ("[Switch] ..."), the
-# way the home screen marks PS4 games. It comes from the game's own "console", "platform" or
+BADGES = pathlib.Path(__file__).resolve().parent / 'badges'
+BADGE_MARGIN = 16
+# The console a tile's game is for is shown on its tile, the way the home screen marks PS4 games
+# (see --label). It comes from the game's own "console", "platform" or
 # "system" field in the library, else from its file's extension, else from the emulator that runs
 # it. Short labels, so the name still fits under the tile.
 CONSOLES = {
@@ -156,16 +160,27 @@ def set_icon(client, app_id, icon):
     return changed
 
 
+def console_key(value):
+    """The CONSOLES key for a console's name ("Nintendo Switch", "switch", "Switch"), or None."""
+    value = str(value or '').strip().lower()
+    if value in CONSOLES:
+        return value
+    return ALIASES.get(value) or next((k for k, name in CONSOLES.items() if name.lower() == value), None)
+
+
+def game_console(game, emulator='PPSA99008'):
+    """The CONSOLES key for a Library game, or None when it is not known."""
+    for field in ('console', 'platform', 'system'):
+        key = console_key(game.get(field))
+        if key:
+            return key
+    extension = pathlib.PurePosixPath(game.get('file', '')).suffix.lower()
+    return EXTENSION_CONSOLE.get(extension) or EMULATOR_CONSOLE.get(emulator)
+
+
 def console_label(game, emulator='PPSA99008'):
     """The short console name for a Library game (see CONSOLES), or '' when it is not known."""
-    for field in ('console', 'platform', 'system'):
-        value = str(game.get(field) or '').strip().lower()
-        key = value if value in CONSOLES else ALIASES.get(value)
-        if key:
-            return CONSOLES[key]
-    extension = pathlib.PurePosixPath(game.get('file', '')).suffix.lower()
-    key = EXTENSION_CONSOLE.get(extension) or EMULATOR_CONSOLE.get(emulator)
-    return CONSOLES.get(key, '')
+    return CONSOLES.get(game_console(game, emulator), '')
 
 
 def restore_icon(client, app_id):
@@ -173,6 +188,19 @@ def restore_icon(client, app_id):
     own = read_remote(client, f'{HOMEBREW}/{app_id}/sce_sys/icon0.png')
     if own and set_icon(client, app_id, own):
         print(f'  {app_id} shows its own icon again')
+
+
+def sync_copies(client, app_id, param_data, icon):
+    """Puts a tile's param.json and icon0.png in the home screen's copies (/user/app, /user/appmeta).
+
+    The home screen keeps the name and picture from when the tile was first registered there.
+    """
+    for path in (f'{APPS}/{app_id}/sce_sys/param.json', f'{APPMETA}/{app_id}/param.json'):
+        if exists(client, path) and read_remote(client, path) != param_data:
+            write_remote(client, path, param_data)
+            print(f'  updated {path}')
+    if icon and set_icon(client, app_id, icon):
+        print(f'  updated the home screen picture of {app_id}')
 
 
 def read_remote(client, path):
@@ -232,19 +260,86 @@ def read_tga(data):
     return width, height, rgb
 
 
-def png_icon(tga_data):
+def scaled_icon(tga_data):
+    """The cover as ICON_SIZE rows of RGB bytes."""
     width, height, rgb = read_tga(tga_data)
-    raw = bytearray()
+    rows = []
     for y in range(ICON_SIZE):
         source = rgb[y * height // ICON_SIZE]
-        raw.append(0)
-        for x in range(ICON_SIZE):
-            raw += bytes(source[x * width // ICON_SIZE])
+        rows.append(bytearray(b''.join(bytes(source[x * width // ICON_SIZE]) for x in range(ICON_SIZE))))
+    return rows
 
+
+def encode_png(rows):
+    """An RGB PNG of rows of RGB bytes."""
     def chunk(kind, body):
         return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
-    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', ICON_SIZE, ICON_SIZE, 8, 2, 0, 0, 0)) +
-            chunk(b'IDAT', zlib.compress(bytes(raw), 9)) + chunk(b'IEND', b''))
+    header = struct.pack('>IIBBBBB', len(rows[0]) // 3, len(rows), 8, 2, 0, 0, 0)
+    raw = b''.join(b'\0' + bytes(row) for row in rows)
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header) + chunk(b'IDAT', zlib.compress(raw, 9)) +
+            chunk(b'IEND', b''))
+
+
+def decode_png(data):
+    """(width, rows of RGBA bytes) of an 8-bit RGB or RGBA PNG without interlacing."""
+    if data[:8] != b'\x89PNG\r\n\x1a\n':
+        raise ValueError('not a PNG')
+    offset, idat = 8, b''
+    while offset < len(data):
+        length, kind = struct.unpack_from('>I4s', data, offset)
+        body = data[offset + 8:offset + 8 + length]
+        if kind == b'IHDR':
+            width, height, depth, colour, _, _, interlace = struct.unpack('>IIBBBBB', body)
+        elif kind == b'IDAT':
+            idat += body
+        offset += 12 + length
+    if depth != 8 or colour not in (2, 6) or interlace:
+        raise ValueError(f'unsupported PNG (colour type {colour}, {depth} bits)')
+    size = 4 if colour == 6 else 3
+    raw = zlib.decompress(idat)
+    stride = width * size
+    rows, previous = [], bytearray(stride)
+    for y in range(height):
+        kind, row = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            left = row[i - size] if i >= size else 0
+            up, corner = previous[i], previous[i - size] if i >= size else 0
+            if kind == 1:
+                row[i] = (row[i] + left) & 0xFF
+            elif kind == 2:
+                row[i] = (row[i] + up) & 0xFF
+            elif kind == 3:
+                row[i] = (row[i] + (left + up) // 2) & 0xFF
+            elif kind == 4:
+                guess = left + up - corner
+                pa, pb, pc = abs(guess - left), abs(guess - up), abs(guess - corner)
+                row[i] = (row[i] + (left if pa <= pb and pa <= pc else up if pb <= pc else corner)) & 0xFF
+        rows.append(row)
+        previous = row
+    if size == 3:
+        rows = [bytearray(b''.join(bytes(r[x:x + 3]) + b'\xff' for x in range(0, stride, 3))) for r in rows]
+    return width, rows
+
+
+def icon_rows(png_data):
+    """An ICON_SIZE x ICON_SIZE PNG as rows of RGB bytes (alpha dropped), or None."""
+    width, rows = decode_png(png_data)
+    if width != ICON_SIZE or len(rows) != ICON_SIZE:
+        return None
+    return [bytearray(b''.join(bytes(r[x:x + 3]) for x in range(0, len(r), 4))) for r in rows]
+
+
+def add_badge(rows, badge_png):
+    """Draws a console badge (RGBA PNG) in the top-left corner of an icon's RGB rows."""
+    width, badge = decode_png(badge_png)
+    for y, source in enumerate(badge):
+        target = rows[BADGE_MARGIN + y]
+        for x in range(min(width, ICON_SIZE - 2 * BADGE_MARGIN)):
+            r, g, b, a = source[4 * x:4 * x + 4]
+            i = 3 * (BADGE_MARGIN + x)
+            for c, value in enumerate((r, g, b)):
+                target[i + c] = (value * a + target[i + c] * (255 - a)) // 255
+    return rows
 
 
 def remove_stale(client, remote, wanted):
@@ -300,10 +395,14 @@ def main(argv):
     parser.add_argument('--port', type=int, default=2121)
     parser.add_argument('--only', help='only the games whose name contains this text')
     parser.add_argument('--dry-run', action='store_true', help='list the tiles without changing the console')
-    parser.add_argument('--console', help="console shown in front of every game's name, instead of each game's own"
-                        " ('' for none)")
+    parser.add_argument('--label', choices=('badge', 'text', 'none'), default='badge',
+                        help="how a tile shows its game's console: a badge on its picture (default), text in front"
+                        " of its name, or not at all")
+    parser.add_argument('--console', help="console of every game (e.g. switch, ps2, pc), instead of each game's own")
     parser.add_argument('--force', action='store_true', help='copy tiles again even when they are up to date')
     options = parser.parse_args(argv)
+    if options.console is not None and not console_key(options.console):
+        sys.exit(f'Unknown console {options.console!r}; known: {", ".join(CONSOLES)}')
     app = options.app
     if not (app / 'eboot.bin').is_file() or not (app / 'sce_sys/param.json').is_file():
         sys.exit(f'{app} is not a tile starter or PPSA99008 folder')
@@ -311,6 +410,7 @@ def main(argv):
     files = sorted(p for p in app.rglob('*') if p.is_file() and p.relative_to(app).as_posix() not in SKIPPED | {LAUNCHER})
     # tile.txt names the starter too, so tiles of an older starter are copied again.
     starter = zlib.crc32((app / 'eboot.bin').read_bytes()) & 0xffffffff
+    default_icon = (app / 'sce_sys/icon0.png').read_bytes() if (app / 'sce_sys/icon0.png').is_file() else None
     wanted = {p.relative_to(app).as_posix() for p in files} | {'tile.txt'}
 
     with connect(options.host, options.port) as client:
@@ -337,38 +437,57 @@ def main(argv):
         for tile_id, game in plan:
             remote = f'{HOMEBREW}/{tile_id}'
             title = f'title={game["title_id"]}\n' if re.fullmatch(r'[0-9A-Fa-f]{16}', game.get('title_id', '')) else ''
-            console = console_label(game) if options.console is None else options.console
-            name = f'[{console}] {game["name"]}' if console else game['name']
-            tile_text = f'rom={game["file"]}\n{title}name={name}\nstarter={starter:08x}\n'.encode()
+            key = console_key(options.console) if options.console else game_console(game)
+            # tiles.json names each game's console too, for dashboards that show it.
+            next(e for e in tiles if e['tile'] == tile_id)['console'] = key or ''
+            name = game['name']
+            if options.label == 'text' and key:
+                name = f'[{CONSOLES[key]}] {name}'
+            badge = None
+            if options.label == 'badge' and key:
+                if (BADGES / f'{key}.png').is_file():
+                    badge = (BADGES / f'{key}.png').read_bytes()
+                else:
+                    print(f'  no badge for {key} in {BADGES}')
+            badge_line = f'badge={key}:{zlib.crc32(badge) & 0xffffffff:08x}\n' if badge else ''
+            tile_text = f'rom={game["file"]}\n{title}name={name}\n{badge_line}starter={starter:08x}\n'.encode()
+            param_data = (json.dumps(tile_param(param, tile_id, name), indent=2) + '\n').encode()
             # Run on a schedule, this only copies new games' tiles and tiles of an updated app.
             if not options.force and read_remote(client, f'{remote}/tile.txt') == tile_text:
                 remove_stale(client, remote, wanted)
+                sync_copies(client, tile_id, param_data, read_remote(client, f'{remote}/sce_sys/icon0.png'))
                 print(f'  {tile_id} is up to date')
                 continue
-            icon = None
+            rows = None
             if game.get('cover'):
                 cover = read_remote(client, game['cover'])
                 try:
-                    icon = png_icon(cover) if cover else None
+                    rows = scaled_icon(cover) if cover else None
                 except (ValueError, IndexError, struct.error) as error:
                     print(f'  cover not used: {error}')
+            if rows is None and badge and default_icon:
+                try:
+                    rows = icon_rows(default_icon)
+                except (ValueError, IndexError, struct.error, zlib.error) as error:
+                    print(f'  no badge on the default picture: {error}')
+            if rows is not None and badge:
+                try:
+                    rows = add_badge(rows, badge)
+                except (ValueError, IndexError, struct.error, zlib.error) as error:
+                    print(f'  badge not used: {error}')
+            icon = encode_png(rows) if rows is not None else None
             for local in files:
                 relative = local.relative_to(app).as_posix()
                 ensure_directory(client, f'{remote}/{relative}'.rsplit('/', 1)[0])
                 if relative == 'sce_sys/param.json':
-                    data = (json.dumps(tile_param(param, tile_id, name), indent=2) + '\n').encode()
+                    data = param_data
                 elif relative == 'sce_sys/icon0.png' and icon:
                     data = icon
                 else:
                     data = local.read_bytes()
                 write_remote(client, f'{remote}/{relative}', data)
             write_remote(client, f'{remote}/tile.txt', tile_text)
-            # The installed copy keeps the name from when the tile was first registered.
-            if exists(client, f'{APPS}/{tile_id}/sce_sys/param.json'):
-                write_remote(client, f'{APPS}/{tile_id}/sce_sys/param.json',
-                             (json.dumps(tile_param(param, tile_id, name), indent=2) + '\n').encode())
-            if icon:
-                set_icon(client, tile_id, icon)
+            sync_copies(client, tile_id, param_data, icon or default_icon)
             remove_stale(client, remote, wanted)
             print(f'  installed {remote}')
         write_remote(client, f'{CONFIG}/tiles.json', (json.dumps({'tiles': tiles}, indent=2) + '\n').encode())
