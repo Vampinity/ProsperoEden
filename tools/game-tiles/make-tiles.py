@@ -20,9 +20,10 @@ a CONSOLES key such as "switch") is kept in /data/prosperoeden/config/tiles.json
 new ones; a tile that is already up to date is skipped, so it can run on a schedule. Needs a running FTP server on the
 console (the Payload SDK's ftpsrv, port 2121) and Python 3 only.
 
-Each tile shows the console its game is for: by default as a badge in the top-left corner of its
-picture (badges/<console>.png, next to this script), or with --label text in front of its name
-("[Switch] ..."). Its name and picture are also put where the home screen keeps its own copies
+Each tile has the game's own name and cover, and the home screen shows its usual PS5 label. With
+--label badge it also gets a console badge in the top-left corner of its picture
+(badges/<console>.png, next to this script), or with --label text the console in front of its name
+("[Switch] ..."); tiles.json names each game's console either way. Its name and picture are also put where the home screen keeps its own copies
 (/user/app and /user/appmeta). Restart the PS5 to see changed names and icons.
 """
 import argparse
@@ -395,9 +396,9 @@ def main(argv):
     parser.add_argument('--port', type=int, default=2121)
     parser.add_argument('--only', help='only the games whose name contains this text')
     parser.add_argument('--dry-run', action='store_true', help='list the tiles without changing the console')
-    parser.add_argument('--label', choices=('badge', 'text', 'none'), default='badge',
-                        help="how a tile shows its game's console: a badge on its picture (default), text in front"
-                        " of its name, or not at all")
+    parser.add_argument('--label', choices=('badge', 'text', 'none'), default='none',
+                        help="how a tile shows its game's console: not at all (default), a badge on its picture, or"
+                        " text in front of its name")
     parser.add_argument('--console', help="console of every game (e.g. switch, ps2, pc), instead of each game's own")
     parser.add_argument('--force', action='store_true', help='copy tiles again even when they are up to date')
     options = parser.parse_args(argv)
