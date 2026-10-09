@@ -16,6 +16,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#if defined(__PROSPERO__)
+#include <unistd.h>
+#endif
 
 #if defined(__PROSPERO__)
 extern "C" int sceKernelLoadStartModule(const char* path, std::size_t argc, const void* argv, std::uint32_t flags,
@@ -40,16 +43,26 @@ struct LoginUserIdList {
 };
 }
 extern "C" int sceUserServiceGetLoginUserIdList(detail::LoginUserIdList* list);
+// The kernel's randomized_path call: the name the sandbox gives the system folder.
+inline constexpr int kRandomizedPath = 602;
 
 inline Status Check() {
     Status status;
-    static constexpr const char* kPaths[] = {"/system/common/lib/libSceRemoteplay.sprx",
-                                             "/system/priv/lib/libSceRemoteplay.sprx"};
-    int handle = -1;
-    for (const char* path : kPaths) {
-        handle = sceKernelLoadStartModule(path, 0, nullptr, 0, nullptr, nullptr);
-        if (handle >= 0) break;
+    // An app's sandbox shows the system folder under a random name ("/<word>/common/lib"), not
+    // as /system; the SDK's loader looks there the same way (crt/rtld.c, __rtld_find_file).
+    char word[0x100] = {};
+    unsigned long word_bytes = sizeof(word) - 1;
+    std::string paths[4];
+    int count = 0;
+    if (syscall(kRandomizedPath, 0, word, &word_bytes) == 0 && word[0]) {
+        paths[count++] = std::string("/") + word + "/common/lib/libSceRemoteplay.sprx";
+        paths[count++] = std::string("/") + word + "/priv/lib/libSceRemoteplay.sprx";
     }
+    paths[count++] = "/system/common/lib/libSceRemoteplay.sprx";
+    paths[count++] = "/system/priv/lib/libSceRemoteplay.sprx";
+    int handle = -1;
+    for (int i = 0; i < count && handle < 0; ++i)
+        handle = sceKernelLoadStartModule(paths[i].c_str(), 0, nullptr, 0, nullptr, nullptr);
     status.module = handle;
     if (handle < 0) return status;
     using GetConnectionStatus = int (*)(int user, int* connected);
