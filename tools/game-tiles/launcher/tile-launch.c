@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * A game tile's starter runs this payload through websrv (GET /hbldr?daemon=1&path=...) and
- * then closes itself. This waits until the starter is gone, then starts ProsperoEden (PPSA99008)
- * with the tile's game ("title=<16 hex digits>" or "rom=<file name>" in its arguments).
+ * then closes itself. This waits until the starter is gone, then starts the tile's emulator
+ * ("app=<title ID>", ProsperoEden PPSA99008 when not given) with the tile's launch arguments (one
+ * "arg=<value>" each). A tile with only "rom=<file name>" starts ProsperoEden with
+ * --rom <file name> --exit-after-game.
  *
  * It never closes an app: websrv's /launch closes the running app and starts the next one at once,
  * which fails while the app being closed is the one asking (PS5 error CE-105773-3). If the
@@ -49,52 +51,93 @@ notify(const char* message) {
 }
 
 
-/* websrv splits its args at spaces and keeps the backslash that escapes one: put the game back
-   together as one argument. */
-static char*
-game_argument(int argc, char** argv) {
-  static char game[1024];
+/* The tile's settings, one per "key=value" argument: websrv splits its args at spaces and keeps the
+   backslash that escapes one, so a value is put back together up to the next known key. */
+#define MAX_ARGS 16
+
+static const char* KEYS[] = {"app=", "arg=", "title=", "rom=", 0};
+
+static int
+key_length(const char* token) {
+  for(int k=0; KEYS[k]; k++) {
+    if(!strncmp(token, KEYS[k], strlen(KEYS[k]))) {
+      return strlen(KEYS[k]);
+    }
+  }
+  return 0;
+}
+
+
+static int
+read_fields(int argc, char** argv, char keys[][8], char values[][1024], int max) {
+  int count = -1;
   size_t length = 0;
-  int found = 0;
 
   for(int i=0; i<argc && argv[i]; i++) {
-    if(!found) {
-      if(strncmp(argv[i], "title=", 6) && strncmp(argv[i], "rom=", 4)) {
-        continue;
+    const char* c = argv[i];
+    int k = key_length(c);
+    if(k) {
+      if(count + 1 == max) {
+        break;
       }
-      found = 1;
-    } else if(!strncmp(argv[i], "title=", 6) || !strncmp(argv[i], "rom=", 4)) {
-      break;
-    } else if(length + 1 < sizeof(game)) {
-      game[length++] = ' ';
+      count++;
+      snprintf(keys[count], 8, "%.*s", k - 1, c);
+      values[count][0] = 0;
+      length = 0;
+      c += k;
+    } else if(count < 0) {
+      continue;
+    } else if(length + 1 < 1024) {
+      values[count][length++] = ' ';
     }
-    for(const char* c=argv[i]; *c && length + 1 < sizeof(game); c++) {
+    for(; *c && length + 1 < 1024; c++) {
       if(*c == '\\' && c[1]) {
         c++;
       }
-      game[length++] = *c;
+      values[count][length++] = *c;
     }
+    values[count][length] = 0;
   }
-  game[length] = 0;
-  return found ? game : 0;
+  return count + 1;
 }
 
 
 int
 main(int argc, char** argv) {
+  static char keys[MAX_ARGS][8];
+  static char values[MAX_ARGS][1024];
   app_launch_ctx_t ctx = {0};
-  char* args[2] = {0, 0};
+  const char* app = EMULATOR;
+  const char* rom = 0;
+  char* args[MAX_ARGS + 3] = {0};
+  int count = 0;
   char message[160];
   int err;
 
-  if(!(args[0]=game_argument(argc, argv))) {
+  int fields = read_fields(argc, argv, keys, values, MAX_ARGS);
+  for(int i=0; i<fields; i++) {
+    if(!strcmp(keys[i], "app")) {
+      app = values[i];
+    } else if(!strcmp(keys[i], "arg")) {
+      args[count++] = values[i];
+    } else if(!strcmp(keys[i], "rom")) {
+      rom = values[i];
+    }
+  }
+  /* A tile made before "app=" and "arg=": its game, the way ProsperoEden takes it since v1.000.080. */
+  if(!count && rom) {
+    args[count++] = "--rom";
+    args[count++] = (char*)rom;
+    args[count++] = "--exit-after-game";
+  }
+  if(!count) {
     notify("Game tile: no game given");
     return EXIT_FAILURE;
   }
 
   for(int i=0; sceSystemServiceGetAppIdOfRunningBigApp() > 0; i++) {
     if(i == WAIT_STEPS) {
-      notify("Game tile: the tile did not close, so ProsperoEden was not started");
+      notify("Game tile: the tile did not close, so the game was not started");
       return EXIT_FAILURE;
     }
     usleep(100 * 1000);
@@ -107,8 +150,8 @@ main(int argc, char** argv) {
     notify(message);
     return EXIT_FAILURE;
   }
-  if((err=sceSystemServiceLaunchApp(EMULATOR, args, &ctx)) < 0) {
-    snprintf(message, sizeof(message), "Game tile: ProsperoEden did not start (0x%08x)", err);
+  if((err=sceSystemServiceLaunchApp(app, args, &ctx)) < 0) {
+    snprintf(message, sizeof(message), "Game tile: %s did not start (0x%08x)", app, err);
     notify(message);
     return EXIT_FAILURE;
   }

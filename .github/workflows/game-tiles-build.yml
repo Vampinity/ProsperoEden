@@ -5,6 +5,10 @@ name: Game tiles build
 on:
   push:
     branches: [game-tiles]
+    # The tile tools alone are built by tile-tools.yml.
+    paths-ignore:
+      - tools/game-tiles/**
+      - .github/workflows/tile-tools.yml
   workflow_dispatch:
 
 concurrency:
