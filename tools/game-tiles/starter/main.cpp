@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * A game tile is this small app with one game's name and icon. It asks websrv on the console
- * (http://127.0.0.1:8080/hbldr) to run /data/prosperoeden/tile-launch.elf with the game named in
- * /app0/tile.txt ("title=<16 hex digits>" or "rom=<file name>"), then closes itself. The launcher
- * waits until this app is gone and starts ProsperoEden (PPSA99008), which boots the game.
+ * (http://127.0.0.1:8080/hbldr) to run /data/prosperoeden/tile-launch.elf with the emulator and
+ * launch arguments named in /app0/tile.txt ("app=<title ID>", one "arg=<value>" each), then closes
+ * itself. The launcher waits until this app is gone and starts the emulator, which boots the game.
  * websrv's /launch is not used: it closes this app and starts the next at once, which fails while
  * this app is still closing (PS5 error CE-105773-3). Anything that goes wrong is shown on screen.
  */
@@ -30,38 +30,45 @@ const char launcher[] = "/data/prosperoeden/tile-launch.elf";
 const char *status = "STARTING THE GAME";
 const char *detail = "";
 
-// The game named in tile.txt as one launch argument: its "title=" line, else its "rom=" line.
-bool read_setting(char *argument, std::size_t size)
+// websrv's args for the launcher from tile.txt: its "app=" and "arg=" lines (older tiles: its
+// "rom=" line), each one argument. websrv splits its args at spaces unless a backslash escapes them.
+bool read_setting(char *arguments, std::size_t size)
 {
     std::FILE *file = std::fopen("/app0/tile.txt", "rb");
     if (file == nullptr)
         return false;
-    char line[512];
-    bool title = false;
-    argument[0] = 0;
+    char line[1024];
+    std::size_t length = 0;
+    arguments[0] = 0;
     while (std::fgets(line, sizeof(line), file) != nullptr) {
         line[std::strcspn(line, "\r\n")] = 0;
-        if (std::strncmp(line, "title=", 6) == 0) {
-            std::snprintf(argument, size, "%s", line);
-            title = true;
-        } else if (std::strncmp(line, "rom=", 4) == 0 && !title) {
-            std::snprintf(argument, size, "%s", line);
+        if (std::strncmp(line, "app=", 4) != 0 && std::strncmp(line, "arg=", 4) != 0 &&
+            std::strncmp(line, "rom=", 4) != 0)
+            continue;
+        if (length != 0 && length + 1 < size)
+            arguments[length++] = ' ';
+        for (const char *c = line; *c && length + 2 < size; ++c) {
+            if (*c == ' ' || *c == '\\')
+                arguments[length++] = '\\';
+            arguments[length++] = *c;
         }
     }
+    arguments[length] = 0;
     std::fclose(file);
-    return argument[0] != 0;
+    return length != 0;
 }
 
-// websrv splits its args at spaces unless a backslash escapes them; the result is URL-encoded.
+// The arguments URL-encoded for websrv's query string.
 void query_value(const char *argument, char *out, std::size_t size)
 {
     static const char hex[] = "0123456789ABCDEF";
     std::size_t length = 0;
-    auto put = [&](unsigned char c) {
+    for (const char *p = argument; *p; ++p) {
+        const unsigned char c = static_cast<unsigned char>(*p);
         const bool plain = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
                            c == '-' || c == '_' || c == '.' || c == '~';
         if (length + 4 >= size)
-            return;
+            break;
         if (plain) {
             out[length++] = static_cast<char>(c);
         } else {
@@ -69,11 +76,6 @@ void query_value(const char *argument, char *out, std::size_t size)
             out[length++] = hex[c >> 4];
             out[length++] = hex[c & 15];
         }
-    };
-    for (const char *c = argument; *c; ++c) {
-        if (*c == ' ' || *c == '\\')
-            put('\\');
-        put(static_cast<unsigned char>(*c));
     }
     out[length] = 0;
 }
@@ -90,8 +92,8 @@ int ask_websrv(const char *argument)
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     int status = 0;
     if (connect(connection, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0) {
-        static char value[2048];
-        static char request[2400];
+        static char value[8192];
+        static char request[8400];
         query_value(argument, value, sizeof(value));
         const int length = std::snprintf(request, sizeof(request),
                                          "GET /hbldr?daemon=1&path=%s&args=%s HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n",
@@ -126,7 +128,7 @@ void draw_scene(ps5::demo::Canvas &canvas) noexcept
 
 int main()
 {
-    static char argument[600];
+    static char argument[2048];
     if (!read_setting(argument, sizeof(argument))) {
         status = "THIS TILE NAMES NO GAME";
         detail = "TILE.TXT IS MISSING. MAKE THE TILE AGAIN.";
