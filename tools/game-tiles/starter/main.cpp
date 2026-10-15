@@ -5,7 +5,9 @@
  * A game tile is this small app with one game's name and icon. It asks websrv on the console
  * (http://127.0.0.1:8080/hbldr) to run /data/prosperoeden/tile-launch.elf with the game named in
  * /app0/tile.txt ("title=<16 hex digits>" or "rom=<file name>"), then closes itself. The launcher
- * waits until this app is gone and starts ProsperoEden (PPSA99008), which boots the game.
+ * waits until this app is gone and starts ProsperoEden (PPSA99008), which boots the game. A tile of
+ * another emulator names it and the ROM instead ("app=<title ID>" and "path=<ROM path>"), and the
+ * launcher starts that emulator with the ROM's path.
  * websrv's /launch is not used: it closes this app and starts the next at once, which fails while
  * this app is still closing (PS5 error CE-105773-3). Anything that goes wrong is shown on screen.
  */
@@ -30,8 +32,9 @@ const char launcher[] = "/data/prosperoeden/tile-launch.elf";
 const char *status = "STARTING THE GAME";
 const char *detail = "";
 
-// The game named in tile.txt as one launch argument: its "title=" line, else its "rom=" line.
-bool read_setting(char *argument, std::size_t size)
+// The game named in tile.txt as one launch argument: its "title=" line, else its "rom=" line, else
+// its "path=" line. An "app=" line names the emulator, as a second argument (app).
+bool read_setting(char *argument, std::size_t size, char *app, std::size_t app_size)
 {
     std::FILE *file = std::fopen("/app0/tile.txt", "rb");
     if (file == nullptr)
@@ -39,13 +42,16 @@ bool read_setting(char *argument, std::size_t size)
     char line[512];
     bool title = false;
     argument[0] = 0;
+    app[0] = 0;
     while (std::fgets(line, sizeof(line), file) != nullptr) {
         line[std::strcspn(line, "\r\n")] = 0;
         if (std::strncmp(line, "title=", 6) == 0) {
             std::snprintf(argument, size, "%s", line);
             title = true;
-        } else if (std::strncmp(line, "rom=", 4) == 0 && !title) {
+        } else if ((std::strncmp(line, "rom=", 4) == 0 || std::strncmp(line, "path=", 5) == 0) && !title) {
             std::snprintf(argument, size, "%s", line);
+        } else if (std::strncmp(line, "app=", 4) == 0) {
+            std::snprintf(app, app_size, "%s", line);
         }
     }
     std::fclose(file);
@@ -79,7 +85,7 @@ void query_value(const char *argument, char *out, std::size_t size)
 }
 
 // websrv's HTTP status for running the launcher: 200 when it runs, 0 when websrv did not answer.
-int ask_websrv(const char *argument)
+int ask_websrv(const char *argument, const char *app)
 {
     const int connection = socket(AF_INET, SOCK_STREAM, 0);
     if (connection < 0)
@@ -91,11 +97,14 @@ int ask_websrv(const char *argument)
     int status = 0;
     if (connect(connection, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0) {
         static char value[2048];
-        static char request[2400];
+        static char app_value[64];
+        static char request[2500];
         query_value(argument, value, sizeof(value));
+        query_value(app, app_value, sizeof(app_value));
+        // An unescaped space (%20) separates the emulator from the game.
         const int length = std::snprintf(request, sizeof(request),
-                                         "GET /hbldr?daemon=1&path=%s&args=%s HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n",
-                                         launcher, value);
+                                         "GET /hbldr?daemon=1&path=%s&args=%s%s%s HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n",
+                                         launcher, app_value, app[0] ? "%20" : "", value);
         if (length > 0 && send(connection, request, static_cast<std::size_t>(length), 0) == length) {
             char reply[64] = {};
             std::size_t got = 0;
@@ -127,11 +136,12 @@ void draw_scene(ps5::demo::Canvas &canvas) noexcept
 int main()
 {
     static char argument[600];
-    if (!read_setting(argument, sizeof(argument))) {
+    static char app[32];
+    if (!read_setting(argument, sizeof(argument), app, sizeof(app))) {
         status = "THIS TILE NAMES NO GAME";
         detail = "TILE.TXT IS MISSING. MAKE THE TILE AGAIN.";
     } else {
-        const int answer = ask_websrv(argument);
+        const int answer = ask_websrv(argument, app);
         if (answer == 200) {
             // The launcher starts ProsperoEden once this app has closed.
             sceSystemServiceLoadExec("exit", nullptr);

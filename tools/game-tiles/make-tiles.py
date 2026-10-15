@@ -4,6 +4,8 @@
 
   tools/game-tiles/make-tiles.py HOST APP_DIR [--port 2121] [--only NAME] [--dry-run]
                                  [--label badge|text|none] [--console NAME] [--force]
+                                 [--art NAME=FOLDER]
+                                 [--art NAME=FOLDER]
 
 APP_DIR is normally the tile starter folder (tools/game-tiles/starter, about 1.7 MB): each tile is
 then a small app, installed as /data/homebrew/PPSA98001-PPSA98999 with the game's name and cover in
@@ -15,7 +17,9 @@ a full copy of the app (about 80 MB) that runs the game itself. Files in a tile 
 not have (from an earlier full copy) are removed. The 4K backgrounds and sound are never copied.
 
 The games come from /data/prosperoeden/config/library.json, which the Library writes: open the
-Library once after adding games. Which tile belongs to which game (and the game's console, as
+Library once after adding games. Games of the other emulators in EMULATORS (Mupen64Plus for N64)
+come from their ROM folders: their tiles hand the ROM's path to that emulator instead (tile.txt
+"app=" and "path=" lines), with its own cover as the picture when it has one. Which tile belongs to which game (and the game's console, as
 a CONSOLES key such as "switch") is kept in /data/prosperoeden/config/tiles.json, so running this again updates the same tiles and only adds
 new ones; a tile that is already up to date is skipped, so it can run on a schedule. Needs a running FTP server on the
 console (the Payload SDK's ftpsrv, port 2121) and Python 3 only.
@@ -25,6 +29,8 @@ Each tile has the game's own name and cover, and the home screen shows its usual
 (badges/<console>.png, next to this script), or with --label text the console in front of its name
 ("[Switch] ..."); tiles.json names each game's console either way. Its name and picture are also put where the home screen keeps its own copies
 (/user/app and /user/appmeta). Restart the PS5 to see changed names and icons.
+--art NAME=FOLDER uses FOLDER/icon0.png (512x512, e.g. saved from an app the game had before) as
+the picture of the game whose name contains NAME.
 """
 import argparse
 import ftplib
@@ -81,7 +87,13 @@ EXTENSIONS = {
 EXTENSION_CONSOLE = {ext: key for key, exts in EXTENSIONS.items() for ext in exts.split()}
 # Emulators whose Library make-tiles.py reads, and the console their games are for when a game's
 # entry and file do not say (.iso, .chd and .bin are used by many consoles).
-EMULATOR_CONSOLE = {'PPSA99008': 'switch'}
+EMULATOR_CONSOLE = {'PPSA99008': 'switch', 'PPSA99064': 'n64'}
+PROSPEROEDEN = 'PPSA99008'
+# Other emulators: each ROM in their folder gets a tile that starts the emulator with its path.
+EMULATORS = {
+    'PPSA99064': {'name': 'Mupen64Plus', 'console': 'n64', 'roms': '/data/mupen64plus/roms',
+                  'covers': '/data/mupen64plus/covers'},
+}
 
 
 def connect(host, port):
@@ -343,6 +355,45 @@ def add_badge(rows, badge_png):
     return rows
 
 
+def scaled_png(png_data):
+    """A PNG of any size as ICON_SIZE rows of RGB bytes (stretched, alpha dropped)."""
+    width, rows = decode_png(png_data)
+    height = len(rows)
+    result = []
+    for y in range(ICON_SIZE):
+        source = rows[y * height // ICON_SIZE]
+        result.append(bytearray(b''.join(bytes(source[4 * (x * width // ICON_SIZE):4 * (x * width // ICON_SIZE) + 3])
+                                         for x in range(ICON_SIZE))))
+    return result
+
+
+def game_name(file_name):
+    """A ROM's file name without its extension and tags: "Super Mario 64 (USA).z64" is "Super Mario 64"."""
+    name = pathlib.PurePosixPath(file_name).stem
+    return re.sub(r'\s*[\(\[][^\)\]]*[\)\]]', '', name).strip() or name
+
+
+def emulator_games(client):
+    """The ROMs of the installed EMULATORS, as games for tiles."""
+    games = []
+    for app, emulator in EMULATORS.items():
+        if not exists(client, f'{HOMEBREW}/{app}/eboot.bin') and not exists(client, f'{APPS}/{app}/eboot.bin'):
+            continue
+        extensions = EXTENSIONS[emulator['console']].split()
+        covers = [c for c in remote_files(client, emulator['covers']) if '/' not in c and c.lower().endswith('.png')]
+        for relative in sorted(remote_files(client, emulator['roms'])):
+            if pathlib.PurePosixPath(relative).suffix.lower() not in extensions:
+                continue
+            stem, name = pathlib.PurePosixPath(relative).stem, game_name(relative)
+            # Mupen64Plus keeps a cover as <ROM file name>.png, or under the game's No-Intro name.
+            cover = next((c for c in covers if c[:-4] == stem), None) or \
+                next((c for c in covers if game_name(c) == name), None)
+            games.append({'file': f'{emulator["roms"]}/{relative}', 'title_id': '', 'name': name, 'app': app,
+                          'console': emulator['console'],
+                          'cover_png': f'{emulator["covers"]}/{cover}' if cover else None})
+    return games
+
+
 def remove_stale(client, remote, wanted):
     """Removes files a tile no longer has (from an earlier full copy), and their emptied folders."""
     stale = sorted(set(remote_files(client, remote)) - wanted)
@@ -384,7 +435,7 @@ def assign_tiles(games, tiles):
             entry = {'tile': f'PPSA{number}'}
             used.add(entry['tile'])
             tiles.append(entry)
-        entry.update(file=game['file'], title_id=game['title_id'], name=game['name'])
+        entry.update(file=game['file'], title_id=game['title_id'], name=game['name'], app=game.get('app', PROSPEROEDEN))
         result.append((entry['tile'], game))
     return result
 
@@ -401,7 +452,16 @@ def main(argv):
                         " text in front of its name")
     parser.add_argument('--console', help="console of every game (e.g. switch, ps2, pc), instead of each game's own")
     parser.add_argument('--force', action='store_true', help='copy tiles again even when they are up to date')
+    parser.add_argument('--art', action='append', default=[], metavar='NAME=FOLDER',
+                        help="picture (FOLDER/icon0.png) for the game whose name contains NAME")
     options = parser.parse_args(argv)
+    art = {}
+    for item in options.art:
+        name, _, folder = item.partition('=')
+        icon = pathlib.Path(folder).expanduser() / 'icon0.png'
+        if not name or not icon.is_file():
+            sys.exit(f'--art {item!r}: give NAME=FOLDER, with an icon0.png in FOLDER')
+        art[name.lower()] = icon.read_bytes()
     if options.console is not None and not console_key(options.console):
         sys.exit(f'Unknown console {options.console!r}; known: {", ".join(CONSOLES)}')
     app = options.app
@@ -416,9 +476,10 @@ def main(argv):
 
     with connect(options.host, options.port) as client:
         library = read_remote(client, f'{CONFIG}/library.json')
-        if library is None:
+        games = [g for g in json.loads(library).get('games', []) if g.get('file')] if library else []
+        games += emulator_games(client)
+        if library is None and not games:
             sys.exit('No library.json on the console yet: open the Library in ProsperoEden once')
-        games = [g for g in json.loads(library).get('games', []) if g.get('file')]
         if options.only:
             games = [g for g in games if options.only.lower() in g.get('name', '').lower()]
         stored = read_remote(client, f'{CONFIG}/tiles.json')
@@ -437,8 +498,9 @@ def main(argv):
 
         for tile_id, game in plan:
             remote = f'{HOMEBREW}/{tile_id}'
+            app_id = game.get('app', PROSPEROEDEN)
             title = f'title={game["title_id"]}\n' if re.fullmatch(r'[0-9A-Fa-f]{16}', game.get('title_id', '')) else ''
-            key = console_key(options.console) if options.console else game_console(game)
+            key = console_key(options.console) if options.console else game_console(game, app_id)
             # tiles.json names each game's console too, for dashboards that show it.
             next(e for e in tiles if e['tile'] == tile_id)['console'] = key or ''
             name = game['name']
@@ -451,16 +513,39 @@ def main(argv):
                 else:
                     print(f'  no badge for {key} in {BADGES}')
             badge_line = f'badge={key}:{zlib.crc32(badge) & 0xffffffff:08x}\n' if badge else ''
-            tile_text = f'rom={game["file"]}\n{title}name={name}\n{badge_line}starter={starter:08x}\n'.encode()
+            picture = next((data for part, data in art.items() if part in game['name'].lower()), None)
+            art_line = f'art={zlib.crc32(picture) & 0xffffffff:08x}\n' if picture else ''
+            existing = read_remote(client, f'{remote}/tile.txt') or b''
+            kept = re.search(rb'^art=[0-9a-f]{8}$', existing, re.M)
+            if picture is None and kept:
+                # A picture given with --art once stays, so runs on a schedule do not need it.
+                art_line = kept.group().decode() + '\n'
+                picture = read_remote(client, f'{remote}/sce_sys/icon0.png')
+            if app_id == PROSPEROEDEN:
+                game_lines = f'rom={game["file"]}\n{title}'
+            else:
+                game_lines = f'app={app_id}\npath={game["file"]}\n'
+            tile_text = f'{game_lines}name={name}\n{badge_line}{art_line}starter={starter:08x}\n'.encode()
             param_data = (json.dumps(tile_param(param, tile_id, name), indent=2) + '\n').encode()
             # Run on a schedule, this only copies new games' tiles and tiles of an updated app.
-            if not options.force and read_remote(client, f'{remote}/tile.txt') == tile_text:
+            if not options.force and existing == tile_text:
                 remove_stale(client, remote, wanted)
                 sync_copies(client, tile_id, param_data, read_remote(client, f'{remote}/sce_sys/icon0.png'))
                 print(f'  {tile_id} is up to date')
                 continue
             rows = None
-            if game.get('cover'):
+            if picture:
+                try:
+                    rows = scaled_png(picture)
+                except (ValueError, IndexError, struct.error, zlib.error) as error:
+                    print(f'  picture not used: {error}')
+            if rows is None and game.get('cover_png'):
+                cover = read_remote(client, game['cover_png'])
+                try:
+                    rows = scaled_png(cover) if cover else None
+                except (ValueError, IndexError, struct.error, zlib.error, UnboundLocalError) as error:
+                    print(f'  cover not used: {error}')
+            if rows is None and game.get('cover'):
                 cover = read_remote(client, game['cover'])
                 try:
                     rows = scaled_icon(cover) if cover else None
