@@ -4,7 +4,8 @@
  *
  * A game tile's starter runs this payload through websrv (GET /hbldr?daemon=1&path=...) and
  * then closes itself. This waits until the starter is gone, then starts ProsperoEden (PPSA99008)
- * with the tile's game ("title=<16 hex digits>" or "rom=<file name>" in its arguments).
+ * with the tile's game ("title=<16 hex digits>" or "rom=<file name>" in its arguments), or, with
+ * "app=<title ID>" and "path=<ROM path>", that emulator with the ROM's path as its argument.
  *
  * It never closes an app: websrv's /launch closes the running app and starts the next one at once,
  * which fails while the app being closed is the one asking (PS5 error CE-105773-3). If the
@@ -59,11 +60,12 @@ game_argument(int argc, char** argv) {
 
   for(int i=0; i<argc && argv[i]; i++) {
     if(!found) {
-      if(strncmp(argv[i], "title=", 6) && strncmp(argv[i], "rom=", 4)) {
+      if(strncmp(argv[i], "title=", 6) && strncmp(argv[i], "rom=", 4) && strncmp(argv[i], "path=", 5)) {
         continue;
       }
       found = 1;
-    } else if(!strncmp(argv[i], "title=", 6) || !strncmp(argv[i], "rom=", 4)) {
+    } else if(!strncmp(argv[i], "title=", 6) || !strncmp(argv[i], "rom=", 4) ||
+              !strncmp(argv[i], "path=", 5) || !strncmp(argv[i], "app=", 4)) {
       break;
     } else if(length + 1 < sizeof(game)) {
       game[length++] = ' ';
@@ -80,10 +82,26 @@ game_argument(int argc, char** argv) {
 }
 
 
+/* The emulator named by an "app=<title ID>" argument, else ProsperoEden. */
+static const char*
+emulator(int argc, char** argv) {
+  static char app[10];
+
+  for(int i=0; i<argc && argv[i]; i++) {
+    if(!strncmp(argv[i], "app=", 4) && strlen(argv[i]) == 13 && !strncmp(argv[i] + 4, "PPSA", 4)) {
+      snprintf(app, sizeof(app), "%s", argv[i] + 4);
+      return app;
+    }
+  }
+  return EMULATOR;
+}
+
+
 int
 main(int argc, char** argv) {
   app_launch_ctx_t ctx = {0};
-  char* args[2] = {0, 0};
+  char* args[3] = {0, 0, 0};
+  const char* app = emulator(argc, argv);
   char message[160];
   int err;
 
@@ -91,10 +109,16 @@ main(int argc, char** argv) {
     notify("Game tile: no game given");
     return EXIT_FAILURE;
   }
+  if(!strncmp(args[0], "path=", 5)) {
+    /* Other emulators take the ROM's path as their first argument (argv[1]); given twice, it is
+       argv[1] whether or not the console puts the app's own path first. */
+    args[0] += 5;
+    args[1] = args[0];
+  }
 
   for(int i=0; sceSystemServiceGetAppIdOfRunningBigApp() > 0; i++) {
     if(i == WAIT_STEPS) {
-      notify("Game tile: the tile did not close, so ProsperoEden was not started");
+      notify("Game tile: the tile did not close, so the game was not started");
       return EXIT_FAILURE;
     }
     usleep(100 * 1000);
@@ -107,8 +131,8 @@ main(int argc, char** argv) {
     notify(message);
     return EXIT_FAILURE;
   }
-  if((err=sceSystemServiceLaunchApp(EMULATOR, args, &ctx)) < 0) {
-    snprintf(message, sizeof(message), "Game tile: ProsperoEden did not start (0x%08x)", err);
+  if((err=sceSystemServiceLaunchApp(app, args, &ctx)) < 0) {
+    snprintf(message, sizeof(message), "Game tile: %s did not start (0x%08x)", app, err);
     notify(message);
     return EXIT_FAILURE;
   }
